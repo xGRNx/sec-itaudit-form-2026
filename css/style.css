@@ -248,3 +248,18 @@ details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
   .report { font-size: 9pt; }
   .break-before { break-before: page; }
 }
+
+/* start page */
+.card.option { display: flex; gap: 16px; align-items: flex-start; }
+.opt-num { font-size: 26px; font-weight: 700; color: var(--accent); line-height: 1; padding-top: 2px; }
+.opt-body { flex: 1; }
+.opt-body h3 { margin-bottom: 4px; }
+.card.current { border-left: 4px solid var(--accent); }
+.cur-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.cur-head button { margin-left: auto; }
+.srcinfo { display: grid; grid-template-columns: 110px 1fr; gap: 3px 12px; margin: 10px 0; font-size: 14px; }
+.srcinfo dt { color: var(--muted); }
+.srcinfo dd { margin: 0; }
+.mono { font-family: Consolas, "Courier New", monospace; font-size: 13px; word-break: break-all; }
+.rev-warn { background: var(--gap-bg); border: 1px solid #efc2bd; border-radius: 8px; padding: 10px 14px; margin-top: 8px; }
+.rev-warn p { margin: 4px 0; }

@@ -15,6 +15,9 @@
   // ---------------- state ----------------
   let wb = null;          // workbook ต้นฉบับ (อยู่ในหน่วยความจำ)
   let tplFileName = '';
+  let tplSource = '';     // 'embedded' | 'file'
+  let tplMeta = null;     // { sha256, meta: {created, modified, creator, lastModifiedBy}, revision: {id, label, detail} }
+  let embeddedCheck = null; // null = ยังไม่ตรวจ, { ok, hex }
   let tpl = null;         // โครงแบบฟอร์มที่อ่านจากไฟล์
   let state = freshState();
   let dirty = false;
@@ -27,6 +30,35 @@
   }
   function freshReportSettings() {
     return { docCode: '', reportRef: '', asOf: '', includeNotes: false };
+  }
+  const TH_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+  /** ISO (UTC) → "22 ก.ย. 2026 15:50 น." ตามเวลาเครื่อง (ปี ค.ศ.) */
+  function fmtDT(iso, withTime = true) {
+    if (!iso) return '–';
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getDate()} ${TH_MONTHS[d.getMonth()]} ${d.getFullYear()}` + (withTime ? ` ${p(d.getHours())}:${p(d.getMinutes())} น.` : '');
+  }
+  async function sha256Hex(bufOrBytes) {
+    if (!(window.crypto && crypto.subtle)) return null;
+    const digest = await crypto.subtle.digest('SHA-256', bufOrBytes);
+    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  /** แยกฉบับของแบบฟอร์มจากสูตรที่ ก.ล.ต. แก้ (K2 เขียน "รอบปี 2569" เหมือนกันทุกฉบับ) */
+  async function detectRevision(workbook) {
+    const [a, b] = T.revisions.signature;
+    const fx = async (sig) => {
+      if (!workbook.sheets[sig.sheet]) return '';
+      const c = (await XL.cells(workbook, sig.sheet)).get(sig.ref);
+      return c && c.f ? (c.ftext || '') : '';
+    };
+    const l6 = await fx(a), l19 = await fx(b);
+    if (/\$272\b/.test(l6) && l19) return { id: T.revisions.latest.id, label: T.revisions.latest.label, status: 'latest' };
+    if (/\$271\b/.test(l6) && !l19) return { id: 'older', label: 'ฉบับก่อน 22 ก.ย. 2026', status: 'older',
+      detail: `สูตร ${a.sheet}!${a.ref} ยังอ้างถึงแถว $271 และ ${b.sheet}!${b.ref} ยังว่าง (ฉบับ 22 ก.ย. 2026 แก้สองจุดนี้แล้ว)` };
+    return { id: 'unknown', label: 'ไม่ตรงกับฉบับที่รู้จัก', status: 'unknown',
+      detail: `สูตร ${a.sheet}!${a.ref} / ${b.sheet}!${b.ref} ไม่ตรงกับฉบับที่ฝังไว้ — อาจเป็นฉบับใหม่กว่า ควรตรวจกับเว็บไซต์ ก.ล.ต.` };
   }
   function todayISO() {
     const d = new Date();
@@ -345,11 +377,12 @@
   // ---------------- header ----------------
   function updateHeader() {
     const info = $('#tplInfo');
-    info.textContent = tpl ? `แบบฟอร์ม: ${tpl.version || '(ไม่ระบุรอบ)'} · ${tplFileName}` : 'ยังไม่ได้โหลดแบบฟอร์ม';
+    const revLbl = tplMeta && tplMeta.revision && tplMeta.revision.status !== 'latest' ? ` · ⚠ ${tplMeta.revision.label}` : '';
+    info.textContent = tpl ? `แบบฟอร์ม: ${tpl.version || '(ไม่ระบุรอบ)'} · ${tplSource === 'embedded' ? 'ฉบับที่ฝังไว้ (' + tplFileName + ')' : 'ไฟล์ ' + tplFileName}${revLbl}` : 'ยังไม่ได้เลือกแบบฟอร์ม';
     const d = $('#dirtyInfo');
     d.textContent = dirty ? '● มีการแก้ไขที่ยังไม่ได้บันทึกงาน (JSON)' : (tpl ? '✓ บันทึกงานแล้ว / ยังไม่มีการแก้ไข' : '');
     d.className = dirty ? 'dirty' : 'clean';
-    for (const id of ['#btnSaveJson', '#btnExport', '#btnLoadJson']) $(id).disabled = !tpl;
+    for (const id of ['#btnSaveJson', '#btnExport']) $(id).disabled = !tpl;
     document.querySelectorAll('#tabs button').forEach(b => { b.disabled = !tpl && b.dataset.tab !== 'start'; b.classList.toggle('active', b.dataset.tab === tab); });
   }
 
@@ -433,32 +466,71 @@
   function cellTag(sheet, ref) { return h('span', { class: 'cellref', title: 'ตำแหน่งเซลล์ในไฟล์ ก.ล.ต.' }, `${sheet}!${ref}`); }
 
   // ---------------- tab: start ----------------
+  function currentFileCard(E) {
+    const m = tplMeta || { meta: {}, revision: {} };
+    const rev = m.revision || {};
+    const isEmbedded = tplSource === 'embedded';
+    const sameAsEmbedded = E && m.sha256 === E.sha256;
+    const verdict = rev.status === 'latest'
+      ? h('p', { class: 'ok-text' }, `✓ ${rev.label} — ตรงกับฉบับที่ฝังไว้${!isEmbedded && sameAsEmbedded ? ' (เป็นไฟล์ต้นฉบับเดียวกันทุก byte)' : ''}`)
+      : rev.status === 'older'
+        ? h('div', { class: 'rev-warn' },
+          h('strong', {}, `⚠ แบบฟอร์ม${rev.label}`), h('p', {}, rev.detail),
+          h('p', {}, 'แนะนำให้ย้ายข้อมูลไปใช้แบบฟอร์มฉบับที่ฝังไว้ (ช่องกรอกเหมือนกันทุกช่อง ข้อมูลไม่หาย) แล้ว Export ใหม่ก่อนส่ง'),
+          h('button', { class: 'btn primary small', onclick: migrateToEmbedded }, 'ย้ายข้อมูลไปแบบฟอร์มฉบับ 22 ก.ย. 2026'))
+        : h('div', { class: 'rev-warn' }, h('strong', {}, `⚠ ${rev.label || 'ตรวจฉบับไม่ได้'}`), rev.detail ? h('p', {}, rev.detail) : null);
+    return h('div', { class: 'card current' },
+      h('div', { class: 'cur-head' },
+        h('strong', {}, 'กำลังใช้: '), isEmbedded ? `แบบฟอร์มที่ฝังไว้ (${tplFileName})` : `ไฟล์ ${tplFileName}`,
+        ` — ${tpl.controls.length} controls ใน ${tpl.ctlSheets.length} sheets`,
+        h('button', { class: 'btn small primary', onclick: () => go('basic') }, 'ไปกรอกแท็บ 1 →')),
+      isEmbedded ? null : h('dl', { class: 'srcinfo' },
+        h('dt', {}, 'SHA-256'), h('dd', { class: 'mono' }, m.sha256 || '(เบราว์เซอร์คำนวณไม่ได้)'),
+        h('dt', {}, 'สร้างเมื่อ'), h('dd', {}, fmtDT(m.meta.created)),
+        h('dt', {}, 'แก้ไขล่าสุด'), h('dd', {}, fmtDT(m.meta.modified), m.meta.lastModifiedBy ? ` โดย ${m.meta.lastModifiedBy}` : '',
+          h('div', { class: 'muted small' }, 'metadata นี้เปลี่ยนทุกครั้งที่มีคนกด Save ใน Excel — ไฟล์ที่ Export จากแอปนี้คง metadata เดิมของแบบฟอร์มไว้ · การบอกฉบับด้านล่างดูจากสูตรในไฟล์ ไม่ได้ดูจากวันที่'))),
+      verdict);
+  }
   function renderStart() {
-    const fileInput = h('input', { type: 'file', accept: '.xlsx', id: 'tplFile', onchange: e => e.target.files[0] && loadTemplateFile(e.target.files[0]) });
+    const E = typeof EMBEDDED_TEMPLATE !== 'undefined' ? EMBEDDED_TEMPLATE : null;
+    const fileInput = h('input', { type: 'file', accept: '.xlsx', id: 'tplFile', hidden: true, onchange: e => { if (e.target.files[0]) loadTemplateFile(e.target.files[0]); e.target.value = ''; } });
+    const status = tpl ? currentFileCard(E) : null;
+    const embedCheckEl = h('span', { class: 'hashcheck' });
+    const paintCheck = () => {
+      if (!embeddedCheck) embedCheckEl.replaceChildren('กำลังตรวจ hash…');
+      else embedCheckEl.replaceChildren(h('span', { class: embeddedCheck.ok ? 'ok-text' : 'warn-text' }, embeddedCheck.ok ? '✓ ตรวจแล้ว: SHA-256 ของไฟล์ที่ฝังไว้ตรงกับค่าที่ระบุ' : '✗ SHA-256 ไม่ตรง — ไฟล์ที่ฝังไว้อาจถูกแก้ไข'));
+    };
+    if (E && !embeddedCheck) embeddedBuffer().catch(() => {}).finally(paintCheck);
+    paintCheck();
+    const embedInfo = E ? h('dl', { class: 'srcinfo' },
+      h('dt', {}, 'ไฟล์'), h('dd', {}, `${E.fileName} (${E.size.toLocaleString()} bytes)`),
+      h('dt', {}, 'ที่มา'), h('dd', { class: 'mono' }, E.source),
+      h('dt', {}, 'สร้างเมื่อ'), h('dd', {}, fmtDT(E.created), h('span', { class: 'muted small' }, ' (metadata ในไฟล์)')),
+      h('dt', {}, 'แก้ไขล่าสุด'), h('dd', {}, h('strong', {}, fmtDT(E.modified)), h('span', { class: 'muted small' }, ' (metadata ในไฟล์ — ใช้บอกฉบับ เพราะประกาศไม่ได้ระบุวันที่)')),
+      h('dt', {}, 'SHA-256'), h('dd', { class: 'mono' }, E.sha256),
+      h('dt', {}, ''), h('dd', {}, embedCheckEl)) : null;
+    const option = (num, title, desc, btn) => h('div', { class: 'card option' },
+      h('div', { class: 'opt-num' }, num),
+      h('div', { class: 'opt-body' }, h('h3', {}, title), h('p', { class: 'muted' }, desc), btn));
     return h('section', { class: 'page' },
       h('h2', {}, 'เริ่มต้นใช้งาน'),
+      status,
+      option('①', 'เริ่มใหม่จากแบบฟอร์มเปล่าของ ก.ล.ต.',
+        E ? 'ใช้แบบฟอร์มต้นฉบับที่ฝังไว้ในแอป ไม่ต้องหาไฟล์เอง — ไฟล์ไม่ถูกแก้ไขใด ๆ ตรวจเทียบกับไฟล์จากเว็บไซต์ ก.ล.ต. ได้ด้วย SHA-256 ด้านล่าง'
+          : 'ไม่พบแบบฟอร์มที่ฝังไว้',
+        h('div', {}, embedInfo, h('button', { class: 'btn primary', disabled: !E, onclick: startBlank }, 'เริ่มจากแบบฟอร์มเปล่า'))),
+      option('②', 'ทำต่อจากไฟล์ xlsx ที่กรอกไว้แล้ว',
+        'เลือกไฟล์แบบรายงานที่เคย Export จากหน้านี้ (หรือกรอกใน Excel) — ค่าที่กรอกไว้จะถูกดึงขึ้นมา และไฟล์นี้จะเป็นฐานตอน Export · ใช้ทางนี้ด้วยถ้า ก.ล.ต. ออกแบบฟอร์มฉบับแก้ไขใหม่',
+        h('span', {}, fileInput, h('button', { class: 'btn', onclick: () => $('#tplFile').click() }, 'เลือกไฟล์ .xlsx…'))),
+      option('③', 'ทำต่อจากงานที่บันทึกไว้ (JSON)',
+        'ไฟล์ JSON เก็บทั้งค่าที่กรอกและบันทึกส่วนตัว (working note, evidence ref, สถานะ finding) — ถ้ายังไม่ได้เลือกแบบฟอร์ม แอปจะใช้แบบฟอร์มที่ฝังไว้เป็นฐานให้อัตโนมัติ · ถ้าเลือกไฟล์ทาง ② ไว้แล้ว JSON จะถูกโหลดทับบนไฟล์นั้น',
+        h('button', { class: 'btn', onclick: () => $('#jsonFile').click() }, 'เลือกไฟล์ JSON…')),
       h('div', { class: 'card privacy' },
         h('h3', {}, '🔒 ข้อมูลไม่ออกจากเครื่องของคุณ'),
         h('ul', {},
           h('li', {}, 'หน้าเว็บนี้ทำงานในเบราว์เซอร์ทั้งหมด ไม่มี server และไม่มีการส่งข้อมูลไปที่ใด (บังคับด้วย Content-Security-Policy: connect-src \'none\')'),
           h('li', {}, 'ไม่มีการบันทึกข้อมูลในเบราว์เซอร์ (ไม่ใช้ localStorage / IndexedDB / cookie) — ปิดแท็บแล้วข้อมูลหายทันที'),
-          h('li', {}, 'เก็บงานด้วยปุ่ม "บันทึกงาน (JSON)" และ "Export xlsx" — ไฟล์ทั้งสองมีข้อมูลการตรวจสอบ ควรเก็บตามนโยบายข้อมูลลับของบริษัท'))),
-      h('div', { class: 'card' },
-        h('h3', {}, 'ขั้นที่ 1 — โหลดไฟล์แบบรายงานของ ก.ล.ต. (.xlsx)'),
-        h('p', { class: 'muted' }, 'ใช้ไฟล์ "แบบรายงานผลการตรวจสอบด้าน IT" รอบปี 2569 — จะเป็นไฟล์เปล่า หรือไฟล์ที่เคย Export จากหน้านี้ก็ได้ (ค่าที่กรอกไว้ในไฟล์จะถูกดึงขึ้นมาให้)'),
-        fileInput,
-        tpl ? h('p', { class: 'ok-text' }, `✓ โหลดแล้ว: ${tplFileName} — ${tpl.controls.length} controls ใน ${tpl.ctlSheets.length} sheets`) : null),
-      h('div', { class: 'card' + (tpl ? '' : ' disabled') },
-        h('h3', {}, 'ขั้นที่ 2 (ถ้ามี) — โหลดงานที่บันทึกไว้ (JSON)'),
-        h('p', { class: 'muted' }, 'ไฟล์ JSON เก็บทั้งค่าที่กรอกและบันทึกส่วนตัว (working note, evidence ref, สถานะ finding) ซึ่งไม่ได้อยู่ในไฟล์ xlsx'),
-        h('button', { class: 'btn', disabled: !tpl, onclick: () => $('#jsonFile').click() }, 'เลือกไฟล์ JSON…')),
-      h('div', { class: 'card' },
-        h('h3', {}, 'ลำดับการใช้งาน'),
-        h('ol', {},
-          h('li', {}, 'โหลดแบบฟอร์ม → กรอกตามแท็บ 1–5'),
-          h('li', {}, 'กด "บันทึกงาน (JSON)" เป็นระยะ เพื่อทำต่อภายหลัง'),
-          h('li', {}, 'แท็บ "ตรวจความครบถ้วน" ช่วยหาจุดที่ยังขาดก่อน Export'),
-          h('li', {}, 'กด "Export xlsx" ได้ไฟล์แบบฟอร์ม ก.ล.ต. ที่กรอกแล้ว (sheet สรุปผลและกราฟคำนวณใหม่เมื่อเปิดด้วย Excel)'))));
+          h('li', {}, 'เก็บงานด้วยปุ่ม "บันทึกงาน (JSON)" และ "Export xlsx" — ไฟล์ทั้งสองมีข้อมูลการตรวจสอบ ควรเก็บตามนโยบายข้อมูลลับของบริษัท'))));
   }
 
   // ---------------- tab: basic ----------------
@@ -774,6 +846,8 @@
     const add = (level, tabName, msg) => out.push({ level, tab: tabName, msg });
     const B = T.basic.sheet, g = r => getVal(B, r);
     const DR = T.dateRules;
+    if (tplMeta && tplMeta.revision && tplMeta.revision.status === 'older') add('warn', 'start', `กำลังใช้แบบฟอร์ม${tplMeta.revision.label} — แนะนำย้ายข้อมูลไปฉบับ 22 ก.ย. 2026 ที่หน้าเริ่มต้นก่อน Export ส่งจริง`);
+    if (tplMeta && tplMeta.revision && tplMeta.revision.status === 'unknown') add('warn', 'start', 'สูตรในแบบฟอร์มที่ใช้อยู่ไม่ตรงกับฉบับที่รู้จัก — ตรวจฉบับกับเว็บไซต์ ก.ล.ต.');
     if (!g('C5')) add('error', 'basic', 'ยังไม่ได้กรอกชื่อบริษัท (C5)');
     if (!/^\d{12,13}$/.test(g('C7'))) add('error', 'basic', 'เลขทะเบียนนิติบุคคล (C7) ต้องเป็นตัวเลข 12–13 หลัก');
     if (!g('C9') || !g('F9') || !g('H9')) add('warn', 'basic', 'ข้อมูลผู้ประสานงาน (ชื่อ/เบอร์/อีเมล) ยังไม่ครบ');
@@ -849,7 +923,7 @@
   // ---------------- tab: check ----------------
   function renderCheck() {
     const issues = validate();
-    const tabsName = { basic: '1. ข้อมูลทั่วไป', systems: '2. ระบบ IT', scope: '3. ขอบเขต', controls: '4. Controls', findings: '5. Finding' };
+    const tabsName = { start: 'เริ่มต้น', basic: '1. ข้อมูลทั่วไป', systems: '2. ระบบ IT', scope: '3. ขอบเขต', controls: '4. Controls', findings: '5. Finding' };
     const levelName = { error: 'ต้องแก้', warn: 'ควรตรวจ', info: 'ข้อสังเกต' };
     const col = T.rlaToCol[getVal(T.basic.sheet, 'C26')] || null;
     const dist = { ok: 0, part: 0, gap: 0, na: 0, blank: 0 };
@@ -897,21 +971,74 @@
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
-  async function loadTemplateFile(file) {
-    if (tpl && (dirty || hasData()) && !confirm('โหลดแบบฟอร์มใหม่จะแทนที่ข้อมูลที่กรอกอยู่ทั้งหมด (ข้อมูลจะถูกอ่านจากไฟล์ใหม่) — ดำเนินการต่อ?')) return;
-    try {
-      const buf = await file.arrayBuffer();
-      const newWb = await XL.open(buf);
-      const newTpl = await parseTemplate(newWb);
-      const st = await readExistingValues(newWb, newTpl);
-      wb = newWb; tpl = newTpl; tplFileName = file.name; state = st; dirty = false; ctlSheet = null;
-      if (tpl.version !== T.formYearLabel) toast(`คำเตือน: ไฟล์นี้ระบุ "${tpl.version || 'ไม่ระบุรอบ'}" แต่เครื่องมือนี้ทำไว้สำหรับ "${T.formYearLabel}" — ผังเซลล์อาจไม่ตรง`, 'error');
+  /** โหลดแบบฟอร์มจาก ArrayBuffer — ใช้ร่วมกันทั้งไฟล์ที่ผู้ใช้เลือกและแบบฟอร์มที่ฝังไว้ */
+  async function loadTemplateBuffer(buf, name, source, quiet = false) {
+    const hex = await sha256Hex(buf);
+    const newWb = await XL.open(buf);
+    const newTpl = await parseTemplate(newWb);
+    const st = await readExistingValues(newWb, newTpl);
+    const revision = await detectRevision(newWb);
+    wb = newWb; tpl = newTpl; tplFileName = name; tplSource = source; state = st; dirty = false; ctlSheet = null;
+    tplMeta = { sha256: hex, meta: newWb.meta || {}, revision, size: buf.byteLength };
+    if (source === 'file' && revision.status === 'older') toast(`⚠ ไฟล์นี้เป็นแบบฟอร์ม${revision.label} — ดูคำแนะนำที่หน้าเริ่มต้น`, 'error');
+    if (source === 'file' && revision.status === 'unknown') toast('⚠ สูตรในไฟล์นี้ไม่ตรงกับแบบฟอร์มฉบับที่รู้จัก — ดูรายละเอียดที่หน้าเริ่มต้น', 'error');
+    if (tpl.version !== T.formYearLabel) toast(`คำเตือน: ไฟล์นี้ระบุ "${tpl.version || 'ไม่ระบุรอบ'}" แต่เครื่องมือนี้ทำไว้สำหรับ "${T.formYearLabel}" — ผังเซลล์อาจไม่ตรง`, 'error');
+    if (!quiet) {
       const filledCount = Object.values(st.cells).reduce((n, o) => n + Object.keys(o).length, 0);
-      toast(`โหลดแบบฟอร์มแล้ว — ${tpl.controls.length} controls${filledCount ? `, พบค่าที่กรอกไว้ ${filledCount} ช่อง, Finding ${st.findings.length} ข้อ` : ''}`);
+      toast(`โหลดแบบฟอร์มแล้ว — ${tpl.controls.length} controls${source === 'file' && filledCount ? `, พบค่าที่กรอกไว้ ${filledCount} ช่อง, Finding ${st.findings.length} ข้อ` : ''}`);
+    }
+  }
+  function confirmReplace() {
+    return !(tpl && (dirty || hasData())) || confirm('ข้อมูลที่กรอกอยู่ทั้งหมดจะถูกแทนที่ — ถ้ายังไม่ได้บันทึกงาน (JSON) ข้อมูลจะหาย ดำเนินการต่อ?');
+  }
+  async function loadTemplateFile(file) {
+    if (!confirmReplace()) return;
+    try {
+      await loadTemplateBuffer(await file.arrayBuffer(), file.name, 'file');
       go('start');
     } catch (err) {
       console.error(err);
       toast('อ่านไฟล์ไม่สำเร็จ: ' + err.message, 'error');
+    }
+  }
+  /** ถอด base64 ของแบบฟอร์มที่ฝังไว้ + ตรวจ SHA-256 ให้ตรงกับไฟล์ต้นฉบับของ ก.ล.ต. */
+  async function embeddedBuffer() {
+    const E = EMBEDDED_TEMPLATE;
+    const bin = atob(E.base64.replace(/\s+/g, ''));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    if (window.crypto && crypto.subtle) {
+      const hex = await sha256Hex(bytes);
+      embeddedCheck = { ok: hex === E.sha256, hex };
+      if (hex !== E.sha256) throw new Error('SHA-256 ของแบบฟอร์มที่ฝังไว้ไม่ตรงกับค่าที่ระบุ — ไฟล์อาจถูกแก้ไข');
+    } else {
+      toast('เบราว์เซอร์นี้ตรวจ SHA-256 ไม่ได้ — ข้ามการตรวจความถูกต้องของแบบฟอร์มที่ฝังไว้', 'error');
+    }
+    return bytes.buffer;
+  }
+  /** ย้ายข้อมูลที่กรอกอยู่ (รวม JSON-only fields) ไปไว้บนแบบฟอร์มฉบับที่ฝังไว้ — ผังเซลล์ของสองฉบับเหมือนกัน */
+  async function migrateToEmbedded() {
+    if (!confirm('ย้ายข้อมูลที่กรอกอยู่ทั้งหมดไปใช้แบบฟอร์มฉบับที่ฝังไว้ (แก้ไข 22 ก.ย. 2026)?\nข้อมูลไม่หาย — Export ครั้งต่อไปจะใช้ฉบับใหม่เป็นฐาน')) return;
+    const keep = state, oldName = tplFileName;
+    try {
+      await loadTemplateBuffer(await embeddedBuffer(), EMBEDDED_TEMPLATE.fileName, 'embedded', true);
+      state = keep;
+      markDirty();
+      toast(`ย้ายข้อมูลจาก ${oldName} ไปแบบฟอร์มฉบับที่ฝังไว้แล้ว — อย่าลืมบันทึกงาน (JSON)`);
+      render();
+    } catch (err) {
+      console.error(err);
+      toast('ย้ายข้อมูลไม่สำเร็จ: ' + err.message, 'error');
+    }
+  }
+  async function startBlank() {
+    if (!confirmReplace()) return;
+    try {
+      await loadTemplateBuffer(await embeddedBuffer(), EMBEDDED_TEMPLATE.fileName, 'embedded');
+      go('basic');
+    } catch (err) {
+      console.error(err);
+      toast('โหลดแบบฟอร์มที่ฝังไว้ไม่สำเร็จ: ' + err.message, 'error');
     }
   }
   function hasData() { return Object.keys(state.cells).length || state.findings.length || Object.keys(state.notes).length; }
@@ -995,12 +1122,14 @@
     try {
       const data = JSON.parse(await file.text());
       if (data.app !== T.appId) throw new Error('ไฟล์นี้ไม่ได้มาจากเครื่องมือนี้ (app id ไม่ตรง)');
-      if (hasData() && !confirm('โหลดงานจาก JSON จะแทนที่ข้อมูลปัจจุบันทั้งหมด — ดำเนินการต่อ?')) return;
+      if (tpl && (dirty || hasData()) && !confirm('โหลดงานจาก JSON จะแทนที่ข้อมูลปัจจุบันทั้งหมด — ดำเนินการต่อ?')) return;
+      // ยังไม่ได้เลือกแบบฟอร์ม → ใช้แบบฟอร์มที่ฝังไว้เป็นฐาน
+      if (!tpl) await loadTemplateBuffer(await embeddedBuffer(), EMBEDDED_TEMPLATE.fileName, 'embedded', true);
       if (data.formVersion && tpl.version && data.formVersion !== tpl.version) toast(`คำเตือน: JSON บันทึกจากแบบฟอร์ม "${data.formVersion}" แต่ไฟล์ที่โหลดอยู่คือ "${tpl.version}"`, 'error');
       state = { cells: data.cells || {}, findings: (data.findings || []).map(f => Object.assign(newFinding(), f)), notes: data.notes || {}, report: Object.assign(freshReportSettings(), data.report || {}) };
       dirty = false;
-      toast(`โหลดงานแล้ว (บันทึกเมื่อ ${data.savedAt ? new Date(data.savedAt).toLocaleString('th-TH') : '-'})`);
-      render(); updateHeader();
+      toast(`โหลดงานแล้ว (บันทึกเมื่อ ${data.savedAt ? new Date(data.savedAt).toLocaleString('th-TH') : '-'}) — ฐานแบบฟอร์ม: ${tplSource === 'embedded' ? 'แบบฟอร์มที่ฝังไว้' : tplFileName}`);
+      if (tab === 'start') go('basic'); else { render(); updateHeader(); }
     } catch (err) {
       toast('โหลด JSON ไม่สำเร็จ: ' + err.message, 'error');
     }

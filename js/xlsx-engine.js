@@ -87,7 +87,16 @@ const XL = (() => {
       const doc = parser.parseFromString(await sstFile.async('string'), 'application/xml');
       for (const si of doc.getElementsByTagNameNS(NS_MAIN, 'si')) sst.push(textOfSi(si));
     }
-    return { zip, sheets, sheetOrder, sst, _cells: {}, _xml: {} };
+    const meta = {};
+    const coreFile = zip.file('docProps/core.xml');
+    if (coreFile) {
+      const core = await coreFile.async('string');
+      for (const [k, tag] of [['created', 'dcterms:created'], ['modified', 'dcterms:modified'], ['creator', 'dc:creator'], ['lastModifiedBy', 'cp:lastModifiedBy']]) {
+        const m = new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`).exec(core);
+        if (m && m[1]) meta[k] = decodeXml(m[1]);
+      }
+    }
+    return { zip, sheets, sheetOrder, sst, meta, _cells: {}, _xml: {} };
   }
 
   function textOfSi(si) {
