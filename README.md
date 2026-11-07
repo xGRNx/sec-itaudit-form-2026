@@ -12,7 +12,7 @@
 |---|---|
 | Server | ไม่มี เป็น static HTML + JavaScript ทำงานในเบราว์เซอร์ทั้งหมด |
 | การส่งข้อมูลออก | ทำไม่ได้ เพราะ `Content-Security-Policy` ใน `index.html` กำหนด `connect-src 'none'` และ `form-action 'none'` |
-| Library ภายนอก | ไม่ดึงจาก CDN มีแค่ JSZip 3.10.2 ซึ่ง vendor ไว้ใน `vendor/` |
+| Library / ฟอนต์ภายนอก | ไม่ดึงจาก CDN — JSZip 3.10.2 อยู่ใน `vendor/` และฟอนต์ Sarabun อยู่ใน `fonts/` (CSP `font-src 'self'`) |
 | การเก็บข้อมูลในเบราว์เซอร์ | ไม่ใช้ localStorage / sessionStorage / IndexedDB / cookie ปิดแท็บแล้วข้อมูลหาย (มีคำเตือนก่อนปิดถ้ายังไม่ได้บันทึก) |
 | การเก็บงาน | ผู้ใช้กด **บันทึกงาน (JSON)** และ **Export xlsx** เอง ไฟล์ลงเครื่องผู้ใช้เท่านั้น |
 
@@ -41,8 +41,10 @@
    | 2. ระบบ IT | `2. Systems` |
    | 3. ขอบเขต | `3. Scope` |
    | 4. Controls | `4. D1`, `D2.1`–`D2.12`, `D3` (271 controls, คอลัมน์ J) |
-   | 5. Finding | `5. Finding` แถว 13–112 |
+   | 5. Finding | `5. Finding` แถว 13–112 และ E5/E6 (จำนวนข้อระดับปานกลาง/ต่ำ — แอปนับให้) |
+   | 6. รายงาน | ไม่เขียนลงไฟล์ — พิมพ์รายงานเป็น PDF |
 
+   ทุกหน้ามีปุ่ม **← ก่อนหน้า / ถัดไป →** ที่ท้ายหน้า (ใน Controls จะเลื่อนทีละ sheet D1 → D2.1 → … → D3 → Finding)
 5. แท็บ **ตรวจความครบถ้วน** ช่วยหาจุดที่ยังขาดหรือไม่สอดคล้องกัน
 6. กด **Export xlsx** แล้วเปิดไฟล์ด้วย Excel ไฟล์ถูกตั้งให้คำนวณสูตรใหม่ทั้งหมดตอนเปิด ทำให้ sheet `6. Result` และกราฟอัปเดตตามข้อมูล
 
@@ -56,9 +58,32 @@
 - **บันทึกส่วนตัวต่อ control:** working note และ evidence ref อยู่ใน JSON เท่านั้น ไม่ถูก export ลงไฟล์ ก.ล.ต.
 - **ติดตาม Finding:** สถานะ Open/Closed และวันที่ปิดจริง (อยู่ใน JSON เท่านั้น) พร้อมไฮไลต์ข้อที่เลยกำหนด
 
+### รายงาน (แท็บ 6 — Phase 2)
+
+| รายงาน | กระดาษ | เนื้อหา |
+|---|---|---|
+| 1-page Summary | A4 แนวตั้ง | ข้อมูลการตรวจ, KPI (ความคืบหน้า, คะแนนเต็ม 3 / เต็ม 5, Advanced compliance %), ผลราย domain, กราฟ NIST CSF 2.0, สถานะ Finding, Finding ที่ต้องติดตาม 5 ข้อ |
+| Detailed Summary | A4 แนวนอน | ตารางเดียวกับ sheet `6. Result` ครบทุก sub-domain, รายการ gap (No/Partial/M1/M2) พร้อม Finding ที่ผูกไว้, ข้อที่ยังไม่ประเมิน และภาคผนวกบันทึกผู้ตรวจ (เมื่อเปิดสวิตช์) |
+| Finding คงค้าง | A4 แนวนอน | Finding ปีนี้ที่สถานะ Open ณ วันที่ที่เลือก, matrix ระดับ × สถานะเวลา (เลยกำหนด / ภายใน 30 วัน / ตามแผน) |
+
+- **หัว/ท้ายกระดาษทุกหน้า:** ชื่อรายงาน (ซ้ายบน), "ข้อมูลลับ — ใช้ภายในเท่านั้น" (ขวาบน), Document code (ซ้ายล่าง), Report reference (กลางล่าง), หน้า X/Y (ขวาล่าง) — Document code / reference เว้นว่างได้
+- **การพิมพ์:** ใช้ Chrome หรือ Edge รุ่นปัจจุบัน → Save as PDF และปิด "Headers and footers" ของเบราว์เซอร์
+- **ตัวเลขตรงกับไฟล์ ก.ล.ต.:** `js/scoring.js` ทำซ้ำสูตรของ `6. Result` และ `RawData` ทุกจุด — ทดสอบด้วยการสุ่มกรอก 5 ชุด (ทุกระดับ RLA, มี/ไม่มีข้อว่าง) แล้วเทียบกับค่าที่ Excel คำนวณ ตรงกันทั้ง 2,155 ค่า
+- **ข้อที่ยังว่าง** นับเป็น 0 คะแนนตามสูตรแบบฟอร์ม — รายงานแสดงคำเตือนแต่ไม่ห้ามพิมพ์
+
+### ข้อสังเกตในแบบฟอร์ม ก.ล.ต. ที่เครื่องมือนี้ "ทำตามสูตรเดิม" เพื่อให้ตัวเลขตรงกับไฟล์
+
+| ตำแหน่ง | สิ่งที่พบ | ผลกระทบ |
+|---|---|---|
+| `RawData!T15` | สูตรคอลัมน์ Govern ของ D1 #14 ค้นหา `"(ID)"` แทน `"(GV)"` | D1 #14 ไม่ถูกนับใน Govern ของกราฟ NIST |
+| `RawData!AB276:AF276` | เทียบ RLA กับ `"ต่ำ**"` แต่ dropdown ใช้ `"ต่ำ"` | RLA ต่ำ ได้กราฟ NIST ของกลุ่มขนาดเล็ก |
+| `RawData!AG276` | Recover เทียบกับ `"ผู้ประกอบธุรกิจขนาดเล็ก**"` และไม่มีค่า else | RLA ต่ำ / ขนาดเล็ก ได้ FALSE (แสดง 0%) |
+| `RawData!S` | mapping บางแถวพิมพ์ไม่ครบ เช่น `GOVERN (GV` | แถวนั้นไม่ถูกนับใน function ดังกล่าว |
+| `4. D1!K11` เป็นต้นไป | สูตร "คำอธิบาย" อ้างแถว 5 แทนแถวตัวเอง | แทบไม่มีผล (ข้อเหล่านั้นเป็น Yes/Partial/No) |
+
 ### ข้อควรทราบ
 
-- **`5. Finding!E5` และ `E6`** (จำนวนข้อตรวจพบระดับปานกลาง/ต่ำ) เป็นช่องที่แบบฟอร์มให้กรอกเอง เครื่องมือนี้ **ไม่เขียน** สองช่องนี้ แต่แสดงตัวเลขที่ต้องกรอกไว้ในแท็บ Finding
+- **`5. Finding!E5` และ `E6`** เป็นช่องที่แบบฟอร์มให้กรอกจำนวนข้อระดับปานกลาง/ต่ำเอง — เครื่องมือนับจาก Finding และเขียนให้ตอน Export (E4 ระดับสูงเป็นสูตรของแบบฟอร์ม)
 - **การ Export:** แก้เฉพาะเซลล์ที่ต้องกรอกใน XML ของไฟล์ ส่วนอื่นไม่ถูกแตะ ได้แก่ สูตร, array formula, กราฟ, data validation, sheet protection และ sheet ที่ซ่อนไว้ เซลล์ที่มีสูตรจะไม่ถูกเขียนทับเด็ดขาด
 - **LibreOffice:** อาจไม่คำนวณสูตรใหม่ตอนเปิดไฟล์ ถ้าเปิดด้วย LibreOffice ให้กด `Ctrl+Shift+F9`
 - **ใช้กับแบบฟอร์มรอบปี 2569 เท่านั้น:** ผังเซลล์อยู่ใน `js/template-2569.js` ถ้าโหลดไฟล์ปีอื่นจะมีคำเตือน ปีถัดไปให้ทำ repo ใหม่ (เช่น `sec-itaudit-form-2027`)
@@ -72,18 +97,21 @@ index.html              หน้าเว็บ + Content-Security-Policy
 css/style.css
 js/xlsx-engine.js       อ่าน/เขียน xlsx แบบแก้เฉพาะเซลล์ (JSZip + XML)
 js/template-2569.js     ผังเซลล์ที่ต้องกรอกของแบบฟอร์มรอบปี 2569
+js/scoring.js           คำนวณผลตามสูตร 6. Result / RawData (NIST CSF)
+js/reports.js           รายงาน 3 ตัว (พิมพ์เป็น PDF)
 js/app.js               UI, การตรวจความครบถ้วน, JSON save/load, Export
 vendor/jszip.min.js     JSZip 3.10.2 (MIT หรือ GPLv3 — ดู header ในไฟล์)
+fonts/                  Sarabun (SIL Open Font License 1.1 — ดู OFL-Sarabun.txt)
 ```
 
 ## การ Deploy ด้วย GitHub Pages (ทำผ่านหน้าเว็บ GitHub ได้ทั้งหมด)
 
 1. สร้าง repo ใหม่ชื่อ `sec-itaudit-form-2026` (Public)
-2. กด **Add file → Upload files** แล้วลากไฟล์และโฟลเดอร์ทั้งหมด (`index.html`, `README.md`, `css/`, `js/`, `vendor/`) ลงไป จากนั้น Commit
+2. กด **Add file → Upload files** แล้วลากไฟล์และโฟลเดอร์ทั้งหมด (`index.html`, `README.md`, `css/`, `js/`, `vendor/`, `fonts/`) ลงไป จากนั้น Commit
 3. ไปที่ **Settings → Pages → Build and deployment → Source: Deploy from a branch** เลือก `main` และ `/ (root)` แล้ว Save
 4. รอสักครู่ หน้าเว็บจะอยู่ที่ `https://<username>.github.io/sec-itaudit-form-2026/`
 
 ## Roadmap
 
-- **Phase 1 (เวอร์ชันนี้):** กรอก, ตรวจความครบถ้วน, Export xlsx, บันทึก/โหลด JSON
-- **Phase 2:** รายงาน 1-page summary, Detailed summary ราย domain และ Finding คงค้าง (พิมพ์เป็น PDF)
+- **Phase 1:** กรอก, ตรวจความครบถ้วน, Export xlsx, บันทึก/โหลด JSON
+- **Phase 2 (เวอร์ชันนี้):** รายงาน 1-page Summary, Detailed Summary, Finding คงค้าง (PDF) · E5/E6 อัตโนมัติ · ปุ่มก่อนหน้า/ถัดไป

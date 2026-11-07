@@ -110,17 +110,26 @@ const XL = (() => {
     return wb._xml[name];
   }
 
-  /** คืน Map ref → {v, f} ของ sheet (v = ค่าที่ cache ไว้, f = มีสูตรหรือไม่) */
+  /** คืน Map ref → {v, f, ftext} ของ sheet (v = ค่าที่ cache ไว้, f = มีสูตรหรือไม่, ftext = ข้อความสูตร) */
   async function cells(wb, name) {
     if (wb._cells[name]) return wb._cells[name];
     const doc = new DOMParser().parseFromString(await sheetXml(wb, name), 'application/xml');
     const map = new Map();
+    const sharedMaster = {}, sharedUsers = [];
     for (const c of doc.getElementsByTagNameNS(NS_MAIN, 'c')) {
       const ref = c.getAttribute('r');
       const t = c.getAttribute('t');
-      let v = null, f = false;
+      let v = null, f = false, ftext = '';
       for (const ch of c.childNodes) {
-        if (ch.localName === 'f') f = true;
+        if (ch.localName === 'f') {
+          f = true;
+          ftext = ch.textContent;
+          // shared formula: แถวแรกเก็บข้อความสูตร แถวอื่นอ้างด้วย si
+          if (ch.getAttribute('t') === 'shared') {
+            const si = ch.getAttribute('si');
+            if (ftext) sharedMaster[si] = ftext; else sharedUsers.push([ref, si]);
+          }
+        }
         else if (ch.localName === 'v') {
           const raw = ch.textContent;
           if (t === 's') v = wb.sst[parseInt(raw, 10)];
@@ -129,8 +138,9 @@ const XL = (() => {
           else v = raw === '' ? null : Number(raw);
         } else if (ch.localName === 'is') v = textOfSi(ch);
       }
-      map.set(ref, { v, f });
+      map.set(ref, { v, f, ftext });
     }
+    for (const [ref, si] of sharedUsers) { const c = map.get(ref); if (c && sharedMaster[si]) c.ftext = sharedMaster[si]; }
     wb._cells[name] = map;
     return map;
   }

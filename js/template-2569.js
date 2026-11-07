@@ -121,8 +121,9 @@ const TEMPLATE = {
     exampleRows: [11, 12],
     rows: range(13, 112),
     noteRef: 'A8',
-    // E5/E6 (จำนวนข้อระดับ M/L) — ตกลงไว้ว่าแอป "ไม่เขียน" เซลล์นี้ (คงตามแบบ ก.ล.ต.)
-    manualCountRefs: { M: 'E5', L: 'E6' },
+    // E5/E6 = ช่องกรอกจำนวนข้อระดับปานกลาง/ต่ำ (แบบฟอร์มให้กรอกเอง) → แอปนับและเขียนให้
+    // E4 (ระดับสูง) เป็นสูตร COUNTIF ของแบบฟอร์ม ไม่ต้องเขียน
+    countRefs: { M: 'E5', L: 'E6' },
     cols: [
       { col: 'B', key: 'B', type: 'list' },
       { col: 'C', key: 'C', type: 'ids' },
@@ -134,6 +135,8 @@ const TEMPLATE = {
       { col: 'I', key: 'I', type: 'text' },
     ],
   },
+
+  result: { sheet: '6. Result', firstRow: 6, lastRow: 36 },
 
   rlaToCol: { 'สูง': 'H', 'ปานกลาง': 'M', 'ต่ำ': 'L', 'ผู้ประกอบธุรกิจขนาดเล็ก': 'S' },
 

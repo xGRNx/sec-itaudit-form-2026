@@ -8,8 +8,9 @@
       script-src 'self'    → รันได้เฉพาะไฟล์ JS ใน repo นี้ (ไม่มี CDN, ไม่มี inline script)
       connect-src 'none'   → ห้าม fetch / XHR / WebSocket / beacon ไปที่ใดทั้งสิ้น
       form-action 'none'   → ห้าม submit form ออกไป
+      font-src 'self'      → ใช้ได้เฉพาะไฟล์ฟอนต์ใน repo (fonts/)
   -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
   <meta name="referrer" content="no-referrer">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>แบบรายงานผล IT Audit (ก.ล.ต.) รอบปี 2569 — ตัวช่วยกรอก</title>
@@ -39,17 +40,21 @@
     <button data-tab="scope">3. ขอบเขต</button>
     <button data-tab="controls">4. Controls (D1–D3)</button>
     <button data-tab="findings">5. Finding</button>
+    <button data-tab="reports">6. รายงาน</button>
     <button data-tab="check">ตรวจความครบถ้วน / Export</button>
   </nav>
   <main id="main"></main>
   <input type="file" id="jsonFile" accept=".json,application/json" hidden>
   <div id="toasts"></div>
+  <div id="printArea"></div>
   <footer class="foot">
     ทำงานในเบราว์เซอร์ทั้งหมด · ไม่มีการจัดเก็บหรือส่งข้อมูล · เครื่องมือส่วนตัว ไม่ใช่ซอฟต์แวร์ของสำนักงาน ก.ล.ต.
   </footer>
   <script src="vendor/jszip.min.js"></script>
   <script src="js/xlsx-engine.js"></script>
   <script src="js/template-2569.js"></script>
+  <script src="js/scoring.js"></script>
+  <script src="js/reports.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

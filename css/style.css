@@ -1,3 +1,12 @@
+@font-face { font-family: "Sarabun"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(../fonts/sarabun-thai-400-normal.woff2) format("woff2"); unicode-range: U+02D7,U+0303,U+0331,U+0E01-0E5B,U+200C-200D,U+25CC; }
+@font-face { font-family: "Sarabun"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(../fonts/sarabun-latin-400-normal.woff2) format("woff2"); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Sarabun"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(../fonts/sarabun-thai-700-normal.woff2) format("woff2"); unicode-range: U+02D7,U+0303,U+0331,U+0E01-0E5B,U+200C-200D,U+25CC; }
+@font-face { font-family: "Sarabun"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(../fonts/sarabun-latin-700-normal.woff2) format("woff2"); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+
 :root {
   --bg: #f4f5f7;
   --card: #ffffff;
@@ -159,8 +168,83 @@ details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
   .topbar { position: static; }
   .filterbar { position: static; }
 }
+
+/* pager (ปุ่มก่อนหน้า/ถัดไป ท้ายหน้า) */
+.pager { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 24px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.controls-page + .pager { margin-left: 186px; }
+
+/* reports tab */
+.field.check { flex-direction: row; align-items: center; gap: 8px; }
+.field.check input { width: auto; }
+.report-bar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+.seg button { border: 0; background: none; padding: 7px 14px; cursor: pointer; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button.active { background: var(--accent); color: #fff; }
+.paper-wrap { overflow-x: auto; padding: 8px 0 20px; }
+.paper { background: #fff; margin: 0 auto; padding: 14mm 12mm; box-shadow: 0 2px 12px rgba(0,0,0,.12); }
+.paper.portrait { width: 210mm; }
+.paper.landscape { width: 297mm; }
+
+/* report body (ใช้ทั้งพรีวิวและตอนพิมพ์) */
+.report { font-family: "Sarabun", "TH Sarabun New", sans-serif; font-size: 9.5pt; line-height: 1.35; color: #1d232b; }
+.report h1 { font-size: 15pt; margin: 0; }
+.report h2 { font-size: 11pt; margin: 10px 0 5px; color: #13324a; border-bottom: 1px solid #c9d3dc; padding-bottom: 2px; }
+.report h3 { font-size: 10pt; margin: 8px 0 4px; }
+.rep-conf { float: right; color: #b3261e; font-weight: 700; font-size: 8.5pt; border: 1px solid #b3261e; border-radius: 3px; padding: 0 6px; }
+.rep-sub { margin: 0 0 6px; color: #5a636e; }
+.rep-meta { width: 100%; border-collapse: collapse; font-size: 9pt; margin-bottom: 6px; }
+.rep-meta th { text-align: left; color: #5a636e; font-weight: 600; width: 16%; padding: 2px 6px 2px 0; vertical-align: top; }
+.rep-meta td { padding: 2px 10px 2px 0; vertical-align: top; }
+.rep-warn { background: #fdf1dc; border: 1px solid #ecd29b; color: #7a4d00; border-radius: 4px; padding: 4px 8px; margin: 6px 0; font-size: 9pt; }
+.rep-note { color: #5a636e; font-size: 8.5pt; margin: 4px 0; white-space: pre-wrap; }
+.rep-foot { color: #5a636e; font-size: 7.5pt; margin-top: 10px; border-top: 1px solid #dde1e6; padding-top: 4px; }
+.kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 8px 0; }
+.kpi { border: 1px solid #d5dae0; border-radius: 5px; padding: 5px 7px; break-inside: avoid; }
+.kpi-l { font-size: 7.5pt; color: #5a636e; line-height: 1.2; min-height: 2.4em; }
+.kpi-v { font-size: 15pt; font-weight: 700; line-height: 1.2; }
+.kpi-s { font-size: 7.5pt; color: #5a636e; }
+.kpi.rag-red { border-color: #b3261e; } .kpi.rag-red .kpi-v { color: #b3261e; }
+.kpi.rag-amber { border-color: #c98a00; } .kpi.rag-amber .kpi-v { color: #9a6200; }
+.kpi.rag-green { border-color: #1d7a46; } .kpi.rag-green .kpi-v { color: #1d7a46; }
+.rep-table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin: 4px 0 6px; }
+.rep-table th, .rep-table td { border: 1px solid #c9d0d8; padding: 2px 4px; vertical-align: top; }
+.rep-table th { background: #e9eef3; font-weight: 700; text-align: center; }
+.rep-table th.grp { background: #d8e3ec; }
+.rep-table td.n { text-align: center; white-space: nowrap; }
+.rep-table td.b { font-weight: 700; }
+.rep-table .sep { border-left: 2px solid #7d8b99; }
+.rep-table tfoot td, .rep-table tr.total td { font-weight: 700; background: #f3f6f8; }
+.rep-table tr { break-inside: avoid; }
+.rep-table thead { display: table-header-group; }
+.rep-table.small { width: auto; min-width: 60%; }
+.rep-table .th { color: #5a636e; font-size: 7.5pt; }
+.rep-table.detail tr.lv1 td { background: #f0f4f7; font-weight: 700; }
+.rep-table.detail tr.lv3 td:nth-child(2) { padding-left: 14px; }
+.rep-table td.nowrap { white-space: pre-line; }
+.rep-table td.pre { white-space: pre-wrap; }
+.rep-table.findings td:nth-child(4), .rep-table.findings td:nth-child(6) { width: 26%; }
+.rating-H { color: #b3261e; font-weight: 700; } .rating-M { color: #9a6200; font-weight: 700; } .rating-L { color: #1d7a46; font-weight: 700; }
+.age-overdue { color: #b3261e; font-weight: 700; } .age-soon { color: #9a6200; font-weight: 700; } .age-none { color: #5a636e; }
+.res-No, .res-M1 { color: #b3261e; font-weight: 700; } .res-Partial, .res-M2 { color: #9a6200; font-weight: 700; }
+.rag-red { color: #b3261e; } .rag-amber { color: #9a6200; } .rag-green { color: #1d7a46; }
+.rep-table.gaps { table-layout: fixed; }
+.rep-table.gaps th.c-id { width: 11%; } .rep-table.gaps th.c-res { width: 7%; } .rep-table.gaps th.c-fd { width: 8%; } .rep-table.gaps th.c-note { width: 26%; }
+.rep-table td.id { white-space: nowrap; }
+.adv { color: #7a3fb0; font-size: 7pt; font-weight: 700; }
+.two-col { display: grid; grid-template-columns: 1.1fr 1fr; gap: 14px; break-inside: avoid; }
+.rep-nist { width: 100%; max-width: 330px; height: auto; font-family: "Sarabun", sans-serif; }
+.gap-sec { break-inside: auto; }
+.gap-sec h3 { break-after: avoid; }
+#printArea { display: none; }
+
 @media print {
-  .topbar, .tabs, .subnav, .filterbar, #toasts, .actions, button { display: none !important; }
   body { background: #fff; }
+  .topbar, .tabs, #toasts, .foot, .pager { display: none !important; }
+  body:not(.print-mode) .subnav, body:not(.print-mode) .filterbar, body:not(.print-mode) button { display: none !important; }
+  body.print-mode > *:not(#printArea) { display: none !important; }
+  body.print-mode #printArea { display: block; }
+  .report .rep-conf { display: none; }   /* ตอนพิมพ์ใช้ป้ายในหัวกระดาษ (@page) แทน */
+  .report { font-size: 9pt; }
+  .break-before { break-before: page; }
 }
-.field .linkbtn { align-self: flex-start; padding: 0; }

@@ -23,7 +23,14 @@
   const filters = { rla: 'auto', status: 'all', q: '' };
 
   function freshState() {
-    return { cells: {}, findings: [], notes: {} };
+    return { cells: {}, findings: [], notes: {}, report: freshReportSettings() };
+  }
+  function freshReportSettings() {
+    return { docCode: '', reportRef: '', asOf: '', includeNotes: false };
+  }
+  function todayISO() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
   // ---------------- DOM helpers ----------------
@@ -161,8 +168,18 @@
       const m = /^A(\d+)$/.exec(ref);
       if (!m || typeof c.v !== 'string') continue;
       const r = m[1];
-      const cat = raw.get('E' + r), adv = raw.get('F' + r);
-      rawInfo[c.v.trim()] = { cat: cat ? String(cat.v) : '', adv: adv ? adv.v === 'Y' : false };
+      const cat = raw.get('E' + r), adv = raw.get('F' + r), dom = raw.get('D' + r), nist = raw.get('S' + r);
+      const nistText = nist && nist.v !== null ? String(nist.v) : '';
+      // ธง NIST ราย function: อ่าน token จากสูตร SEARCH("(XX)",$S) ในคอลัมน์ T–Y ของแถวนั้นจริง ๆ
+      // (บางแถวในแบบฟอร์มค้นหา token ผิดคอลัมน์ เช่น RawData!T15 — ใช้ตามสูตรจริงเพื่อให้ตัวเลขตรงกับไฟล์)
+      const nistFlags = {};
+      for (const [col, key] of [['T', 'GV'], ['U', 'ID'], ['V', 'PR'], ['W', 'DE'], ['X', 'RS'], ['Y', 'RC']]) {
+        const cell = raw.get(col + r);
+        const m = cell && /SEARCH\("\(([A-Za-z]+)\)"/.exec(cell.ftext || '');
+        if (m) nistFlags[key] = nistText.toUpperCase().includes('(' + m[1].toUpperCase() + ')');
+        else nistFlags[key] = !!(cell && String(cell.v).toUpperCase() === 'X');
+      }
+      rawInfo[c.v.trim()] = { cat: cat ? String(cat.v) : '', adv: adv ? adv.v === 'Y' : false, domain: dom ? String(dom.v) : '', nist: nistText, nistFlags };
     }
 
     // --- 4. Controls (D1–D3) ---
@@ -186,6 +203,9 @@
             mat: C.col.mat.map(col => String(get(col + r) || '').trim()),
             cat: rawInfo[id] ? rawInfo[id].cat : '',
             adv: rawInfo[id] ? rawInfo[id].adv : false,
+            domain: (rawInfo[id] && rawInfo[id].domain) || id.split(/[.\s]/)[0],
+            nist: rawInfo[id] ? rawInfo[id].nist : '',
+            nistFlags: rawInfo[id] ? rawInfo[id].nistFlags : null,
           };
           // แถวที่ไม่มี "ประเภทการวัดผล" = แบบฟอร์มล็อกค่าไว้ (เช่น อ้างอิงข้ออื่น) → แสดงอย่างเดียว
           ctl.fixed = ctl.type ? null : (clean(get(C.col.result + r)) || 'N/A');
@@ -199,6 +219,14 @@
         }
       }
       t.ctlSheets.push(sh);
+    }
+
+    // --- 6. Result: ชื่อหัวข้อ (EN/TH) ราย domain / sub-domain ---
+    t.resultLabels = {};
+    if (workbook.sheets[T.result.sheet]) {
+      for (let r = T.result.firstRow; r <= T.result.lastRow; r++) {
+        t.resultLabels[r] = { key: clean(await val(T.result.sheet, 'A' + r)), en: clean(await val(T.result.sheet, 'B' + r)), th: clean(await val(T.result.sheet, 'C' + r)) };
+      }
     }
 
     // --- 5. Finding ---
@@ -336,8 +364,40 @@
   function render() {
     const main = $('#main');
     main.replaceChildren();
-    const fn = { start: renderStart, basic: renderBasic, systems: renderSystems, scope: renderScope, controls: renderControls, findings: renderFindings, check: renderCheck }[tab];
+    const fn = { start: renderStart, basic: renderBasic, systems: renderSystems, scope: renderScope, controls: renderControls, findings: renderFindings, reports: renderReports, check: renderCheck }[tab];
     main.append(fn());
+    const nav = bottomNav();
+    if (nav) main.append(nav);
+  }
+
+  // ---------------- ปุ่มก่อนหน้า / ถัดไป ท้ายหน้า ----------------
+  const TAB_LABEL = { start: 'เริ่มต้น', basic: '1. ข้อมูลทั่วไป', systems: '2. ระบบ IT', scope: '3. ขอบเขต', findings: '5. Finding', reports: '6. รายงาน', check: 'ตรวจความครบถ้วน / Export' };
+  function pageSeq() {
+    const seq = [['start'], ['basic'], ['systems'], ['scope']];
+    for (const sh of tpl.ctlSheets) seq.push(['controls', sh.name]);
+    seq.push(['findings'], ['reports'], ['check']);
+    return seq;
+  }
+  function pageLabel([t, s]) {
+    if (t !== 'controls') return TAB_LABEL[t];
+    const sh = tpl.ctlSheets.find(x => x.name === s);
+    return `4. Controls ${sh.short}`;
+  }
+  function goPage([t, s]) {
+    if (t === 'controls') ctlSheet = s;
+    go(t);
+  }
+  function bottomNav() {
+    if (!tpl) return null;
+    const seq = pageSeq();
+    const cur = tab === 'controls' ? (ctlSheet || tpl.ctlSheets[0].name) : null;
+    const idx = seq.findIndex(([t, s]) => t === tab && (t !== 'controls' || s === cur));
+    if (idx < 0) return null;
+    const prev = seq[idx - 1], next = seq[idx + 1];
+    return h('nav', { class: 'pager' },
+      prev ? h('button', { class: 'btn', onclick: () => goPage(prev) }, '← ', pageLabel(prev)) : h('span'),
+      h('span', { class: 'muted small' }, `${idx + 1} / ${seq.length}`),
+      next ? h('button', { class: 'btn primary', onclick: () => goPage(next) }, pageLabel(next), ' →') : h('span'));
   }
 
   // ---------------- input builders ----------------
@@ -549,7 +609,7 @@
     nav.replaceChildren(...tpl.ctlSheets.map(sh => {
       const p = sheetProgress(sh);
       const gaps = sh.controls.filter(c => isGap(ctlValue(c))).length;
-      return h('button', { class: (sh.name === ctlSheet ? 'active ' : '') + (p.total && p.done === p.total ? 'complete' : ''), onclick: () => { ctlSheet = sh.name; render(); } },
+      return h('button', { class: (sh.name === ctlSheet ? 'active ' : '') + (p.total && p.done === p.total ? 'complete' : ''), onclick: () => { ctlSheet = sh.name; render(); window.scrollTo(0, 0); } },
         h('span', { class: 'nm' }, sh.short),
         h('span', { class: 'pg' }, `${p.done}/${p.total}`),
         gaps ? h('span', { class: 'gapcount', title: 'จำนวนข้อ No/Partial/M1/M2' }, gaps) : null);
@@ -643,7 +703,7 @@
           stat('ทั้งหมด', state.findings.length), stat('High', c.H, 'gap'), stat('Medium', c.M, 'part'), stat('Low', c.L, 'ok'),
           stat('Open', c.open), stat('Closed', c.closed, 'na'), stat('เลยกำหนด', c.overdue, c.overdue ? 'gap' : '')),
         h('p', { class: 'hint' },
-          `หมายเหตุ: ช่อง ${T.findings.sheet}!E5 และ E6 (จำนวนข้อระดับปานกลาง/ต่ำ) เป็นช่องที่แบบฟอร์มให้กรอกเอง — ตามที่ตกลงไว้ แอปจะไม่เขียนให้ หลัง Export ให้กรอกเอง: ปานกลาง = ${c.M}, ต่ำ = ${c.L} (E4 ระดับสูง คำนวณด้วยสูตรของแบบฟอร์ม)`));
+          `ตอน Export แอปจะกรอก ${T.findings.sheet}!E5 = ${c.M} (ปานกลาง) และ E6 = ${c.L} (ต่ำ) ให้ — ส่วน E4 (สูง) คำนวณด้วยสูตรของแบบฟอร์มเอง`));
     }
     function draw() {
       drawSummary();
@@ -783,10 +843,6 @@
       if (okRated.length) add('warn', 'findings', `${n}: อ้างถึง control ที่ประเมินผ่าน (${okRated.map(id => id + '=' + ctlValue(tpl.controlsById[id])).join(', ')}) — ตรวจความสอดคล้อง`);
       if (f.B && ids[0] && tpl.controlsById[ids[0]] && f.B !== domainFor(ids[0])) add('warn', 'findings', `${n}: หมวด "${f.B}" ไม่ตรงกับ control ${ids[0]}`);
     });
-    if (state.findings.length) {
-      const c = findingCounts();
-      add('info', 'findings', `หลัง Export ต้องกรอก ${T.findings.sheet}!E5 = ${c.M} (ปานกลาง) และ E6 = ${c.L} (ต่ำ) เอง`);
-    }
     return out;
   }
 
@@ -860,13 +916,75 @@
   }
   function hasData() { return Object.keys(state.cells).length || state.findings.length || Object.keys(state.notes).length; }
 
+  // ---------------- tab: reports (Phase 2) ----------------
+  let reportKind = 'summary';
+  function reportCtx() {
+    const rs = state.report || (state.report = freshReportSettings());
+    return {
+      h, T, tpl, state, getVal, ctlValue, parseIds,
+      settings: { asOf: rs.asOf || todayISO(), includeNotes: !!rs.includeNotes },
+      score: Scoring.compute(tpl.controls, ctlValue, getVal(T.basic.sheet, 'C26')),
+    };
+  }
+  function renderReports() {
+    const rs = state.report || (state.report = freshReportSettings());
+    const setRs = (k, v) => { rs[k] = v; markDirty(); drawPreview(); };
+    const preview = h('div', { class: 'paper-wrap' });
+    function drawPreview() {
+      const rep = Reports.build(reportKind, reportCtx());
+      preview.replaceChildren(h('div', { class: 'paper ' + rep.orientation }, rep.el));
+    }
+    const kindBtns = h('div', { class: 'seg' }, Object.entries(Reports.KINDS).map(([k, m]) =>
+      h('button', { class: k === reportKind ? 'active' : '', onclick: e => { reportKind = k; kindBtns.querySelectorAll('button').forEach(b => b.classList.remove('active')); e.target.classList.add('active'); drawPreview(); } }, m.title)));
+    drawPreview();
+    return h('section', { class: 'page' },
+      h('h2', {}, '6. รายงาน (พิมพ์เป็น PDF)'),
+      h('div', { class: 'card' },
+        h('div', { class: 'grid' },
+          h('label', { class: 'field' }, h('span', { class: 'lbl' }, 'Document code (footer ซ้าย)'), h('input', { type: 'text', value: rs.docCode, placeholder: 'เว้นว่างได้', oninput: e => setRs('docCode', e.target.value) })),
+          h('label', { class: 'field' }, h('span', { class: 'lbl' }, 'Report reference (footer กลาง)'), h('input', { type: 'text', value: rs.reportRef, placeholder: 'เว้นว่างได้ เช่น IA-XX/2026', oninput: e => setRs('reportRef', e.target.value) })),
+          h('label', { class: 'field' }, h('span', { class: 'lbl' }, 'ข้อมูล ณ วันที่ (ใช้คำนวณ Finding เลยกำหนด)'), h('input', { type: 'date', value: rs.asOf || todayISO(), onchange: e => setRs('asOf', e.target.value) })),
+          h('label', { class: 'field check' }, h('input', { type: 'checkbox', checked: !!rs.includeNotes, onchange: e => setRs('includeNotes', e.target.checked) }), h('span', {}, 'รวมบันทึกผู้ตรวจ (working note / evidence ref) ในรายงาน Detailed'))),
+        h('p', { class: 'hint' }, 'พิมพ์ด้วย Chrome หรือ Edge → เลือก "Save as PDF" · ปิดตัวเลือก "Headers and footers" ของเบราว์เซอร์ (รายงานมีหัว/ท้ายกระดาษของตัวเองพร้อมเลขหน้า X/Y) · ป้าย "ข้อมูลลับ — ใช้ภายในเท่านั้น" อยู่ทุกหน้า')),
+      h('div', { class: 'report-bar' }, kindBtns, h('button', { class: 'btn primary', onclick: () => printReport(reportKind) }, '🖨 พิมพ์ / Save as PDF')),
+      preview);
+  }
+  function cssStr(s) { return '"' + String(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ') + '"'; }
+  function printReport(kind) {
+    const ctx = reportCtx();
+    const rep = Reports.build(kind, ctx);
+    const rs = state.report || freshReportSettings();
+    $('#printArea').replaceChildren(rep.el);
+    document.body.classList.add('print-mode');
+    const box = 'font-family: Sarabun, "TH Sarabun New", sans-serif; font-size: 8pt; color: #5a636e;';
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(`@page { size: A4 ${rep.orientation}; margin: 15mm 12mm 14mm 12mm;
+      @top-left { content: ${cssStr(rep.title + ' · IT Audit ก.ล.ต. รอบปี 2569')}; ${box} }
+      @top-right { content: "ข้อมูลลับ — ใช้ภายในเท่านั้น"; ${box} color: #b3261e; font-weight: 700; }
+      @bottom-left { content: ${cssStr(rs.docCode)}; ${box} }
+      @bottom-center { content: ${cssStr(rs.reportRef)}; ${box} }
+      @bottom-right { content: "หน้า " counter(page) "/" counter(pages); ${box} } }`);
+    document.adoptedStyleSheets = [sheet];
+    const oldTitle = document.title;
+    document.title = rep.fileTitle;
+    const cleanup = () => {
+      document.body.classList.remove('print-mode');
+      document.adoptedStyleSheets = [];
+      $('#printArea').replaceChildren();
+      document.title = oldTitle;
+    };
+    window.__lastPrint = { kind, cleanup };
+    window.print();
+    if (!window.__keepPrintArea) setTimeout(cleanup, 500);
+  }
+
   function saveJson() {
     if (!tpl) return;
     const payload = {
       app: T.appId, schemaVersion: SCHEMA_VERSION, formVersion: tpl.version,
       savedAt: new Date().toISOString(),
       note: 'ไฟล์นี้มีข้อมูลการตรวจสอบ — เก็บตามนโยบายข้อมูลลับของบริษัท',
-      cells: state.cells, findings: state.findings, notes: state.notes,
+      cells: state.cells, findings: state.findings, notes: state.notes, report: state.report,
     };
     download(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `ITAudit2569_work_${stamp()}.json`);
     dirty = false; updateHeader();
@@ -879,7 +997,7 @@
       if (data.app !== T.appId) throw new Error('ไฟล์นี้ไม่ได้มาจากเครื่องมือนี้ (app id ไม่ตรง)');
       if (hasData() && !confirm('โหลดงานจาก JSON จะแทนที่ข้อมูลปัจจุบันทั้งหมด — ดำเนินการต่อ?')) return;
       if (data.formVersion && tpl.version && data.formVersion !== tpl.version) toast(`คำเตือน: JSON บันทึกจากแบบฟอร์ม "${data.formVersion}" แต่ไฟล์ที่โหลดอยู่คือ "${tpl.version}"`, 'error');
-      state = { cells: data.cells || {}, findings: (data.findings || []).map(f => Object.assign(newFinding(), f)), notes: data.notes || {} };
+      state = { cells: data.cells || {}, findings: (data.findings || []).map(f => Object.assign(newFinding(), f)), notes: data.notes || {}, report: Object.assign(freshReportSettings(), data.report || {}) };
       dirty = false;
       toast(`โหลดงานแล้ว (บันทึกเมื่อ ${data.savedAt ? new Date(data.savedAt).toLocaleString('th-TH') : '-'})`);
       render(); updateHeader();
@@ -911,6 +1029,9 @@
         put(F.sheet, c.col + r, v);
       }
     });
+    const fc = findingCounts();
+    put(F.sheet, F.countRefs.M, fc.M);
+    put(F.sheet, F.countRefs.L, fc.L);
     return ups;
   }
 
@@ -941,6 +1062,10 @@
   }
 
   // เปิดให้ชุดทดสอบเรียกได้ (ไม่มีผลต่อการทำงานปกติ)
-  window.__app = { get state() { return state; }, get tpl() { return tpl; }, validate, buildUpdates };
+  window.__app = {
+    get state() { return state; }, get tpl() { return tpl; }, validate, buildUpdates,
+    score: () => Scoring.compute(tpl.controls, ctlValue, getVal(T.basic.sheet, 'C26')),
+    setVal, printReport, render: () => render(),
+  };
   document.addEventListener('DOMContentLoaded', init);
 })();
