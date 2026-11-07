@@ -19,12 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
--------------------------------------------------------------------------------
-This license applies only to the original source code of this repository.
-Third-party components are licensed separately — see "License & Third-party
-notices" in README.md:
-  - vendor/jszip.min.js           JSZip — MIT (dual-licensed MIT or GPLv3)
-  - fonts/*                       Sarabun — SIL Open Font License 1.1
-  - js/template-2569-data.js      Embedded SEC Thailand form (11155p.xlsx) —
-                                  NOT covered by this license; no rights claimed
