@@ -11,6 +11,7 @@
 (() => {
   const T = TEMPLATE;
   const SCHEMA_VERSION = 1;
+  const APP_VERSION = '2.3.0';
 
   // ---------------- state ----------------
   let wb = null;          // workbook ต้นฉบับ (อยู่ในหน่วยความจำ)
@@ -24,6 +25,15 @@
   let tab = 'start';
   let ctlSheet = null;
   const filters = { rla: 'auto', status: 'all', q: '' };
+  // การนำทาง (hash routing → ปุ่มย้อนของเบราว์เซอร์/เมาส์ใช้ได้)
+  const scrollMemo = {};      // ตำแหน่งเลื่อนหน้าของแต่ละหน้า
+  let pendingNav = null;      // {key, scroll: 'top'|'restore', then}
+  let currentKey = null;
+  let lastCtlSheet = null;    // sheet Controls ที่เปิดล่าสุด (ใช้กับปุ่มย้อนจากหน้า Finding)
+  const visited = new Set();  // sheet ที่ "ผ่านแล้ว" → ไฮไลต์ข้อที่ยังไม่ตอบ
+  const cardPaint = {};       // control ID → ฟังก์ชันวาดการ์ดใหม่
+  let drawer = null;          // สถานะแผงด้านขวา
+  let leaveViaNext = false;   // ออกจาก sheet ด้วยปุ่ม "ถัดไป →" → แจ้งข้อที่ค้าง
 
   function freshState() {
     return { cells: {}, findings: [], notes: {}, report: freshReportSettings() };
@@ -86,10 +96,11 @@
   const $ = sel => document.querySelector(sel);
   const clean = s => (s === null || s === undefined) ? '' : String(s).replace(/ /g, ' ').trim();
 
-  function toast(msg, kind = 'info') {
-    const el = h('div', { class: 'toast ' + kind, text: msg });
+  function toast(msg, kind = 'info', action = null) {
+    const el = h('div', { class: 'toast ' + kind }, h('span', {}, msg),
+      action ? h('button', { class: 'toast-act', onclick: () => { el.remove(); action.fn(); } }, action.label) : null);
     $('#toasts').append(el);
-    setTimeout(() => el.remove(), kind === 'error' ? 8000 : 4000);
+    setTimeout(() => el.remove(), action ? 9000 : kind === 'error' ? 8000 : 4000);
   }
 
   function markDirty() {
@@ -341,6 +352,49 @@
     }
     return { total, done };
   }
+  function companyCol() { return T.rlaToCol[getVal(T.basic.sheet, 'C26')] || null; }
+  /** ข้อที่ยังไม่ตอบ (เข้าข่ายตาม RLA ของบริษัท และไม่ใช่ข้อที่แบบฟอร์มล็อกไว้) */
+  function pendingOf(sh) {
+    const col = companyCol();
+    return sh.controls.filter(c => !c.fixed && (!col || c.appl[col]) && !ctlValue(c));
+  }
+  function seedVisited() {
+    visited.clear();
+    if (!tpl) return;
+    for (const sh of tpl.ctlSheets) if (sh.controls.some(c => !c.fixed && getVal(c.sheet, c.cell))) visited.add(sh.name);
+  }
+  function onLeaveSheet(name, notify) {
+    visited.add(name);
+    if (!notify) return;
+    document.querySelectorAll('.toast[data-sheet]').forEach(el => el.remove());
+    const sh = tpl.ctlSheets.find(x => x.name === name);
+    const pend = pendingOf(sh);
+    if (pend.length) toastSheet(name, `${sh.short} ยังไม่ประเมิน ${pend.length} ข้อ: ${pend.slice(0, 6).map(c => c.id).join(', ')}${pend.length > 6 ? ' …' : ''}`, 'warn',
+      { label: 'กลับไปดู', fn: () => navigate('controls', name, { then: () => { const r = $('#ctlRemarks'); if (r) r.scrollIntoView({ block: 'center' }); } }) });
+  }
+  function toastSheet(sheet, msg, kind, action) {
+    toast(msg, kind, action);
+    const all = document.querySelectorAll('#toasts .toast');
+    all[all.length - 1].dataset.sheet = sheet;
+  }
+  /** เลื่อนไปที่การ์ด control (ล้างตัวกรองที่ซ่อนการ์ดให้ถ้าจำเป็น) แล้วไฮไลต์ */
+  function scrollToControl(id) {
+    const elId = 'ctl-' + id.replace(/\W+/g, '_');
+    let el = document.getElementById(elId);
+    if (!el) {
+      filters.q = ''; filters.status = 'all';
+      const c = tpl.controlsById[id];
+      if (c && !isApplicable(c)) filters.rla = 'all';
+      render();
+      el = document.getElementById(elId);
+    }
+    if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600); }
+  }
+  function gotoControl(id) {
+    const c = tpl.controlsById[id];
+    if (!c) { toast('ไม่พบ control ID: ' + id, 'error'); return; }
+    navigate('controls', c.sheet, { then: () => scrollToControl(id) });
+  }
   function domainFor(id) {
     const opts = tpl.findColByKey.B.options || [];
     const prefix = id.startsWith('D1') ? 'D1.' : id.startsWith('D2') ? 'D2.' : id.startsWith('D3') ? 'D3.' : '';
@@ -386,11 +440,52 @@
     document.querySelectorAll('#tabs button').forEach(b => { b.disabled = !tpl && b.dataset.tab !== 'start'; b.classList.toggle('active', b.dataset.tab === tab); });
   }
 
-  function go(newTab) {
-    tab = newTab;
+  // ---------------- routing ----------------
+  const TABS = ['start', 'basic', 'systems', 'scope', 'controls', 'findings', 'reports', 'check'];
+  // ใน URL ใช้ชื่อสั้นของ sheet (D1, D2.8 …) แทนชื่อเต็ม ("4. D1")
+  const shortOf = name => String(name).replace(/^4\.\s*/, '');
+  const sheetFromShort = sh => tpl && (tpl.ctlSheets.find(x => x.short === sh || x.name === sh) || {}).name;
+  function routeKey(t, s) { return t === 'controls' ? `#/controls/${encodeURIComponent(shortOf(s))}` : `#/${t}`; }
+  function parseHash() {
+    const m = /^#\/([a-z]+)(?:\/(.+))?$/.exec(location.hash);
+    return m ? [m[1], m[2] ? decodeURIComponent(m[2]) : null] : ['start', null];
+  }
+  /** เปลี่ยนหน้าโดยเพิ่ม history entry — ปุ่มย้อน/ไปข้างหน้าของเบราว์เซอร์และเมาส์จึงทำงานในแอป */
+  function navigate(t, s = null, opts = {}) {
+    if (t === 'controls') s = s || ctlSheet || (tpl && tpl.ctlSheets[0].name);
+    const key = routeKey(t, s);
+    pendingNav = { key, scroll: opts.scroll || 'top', then: opts.then || null };
+    if (location.hash === key || (key === '#/start' && !location.hash)) applyRoute();
+    else location.hash = key;
+  }
+  function go(newTab) { navigate(newTab); }
+  function applyRoute() {
+    let [t, s] = parseHash();
+    if (!TABS.includes(t) || (!tpl && t !== 'start')) { t = 'start'; s = null; if (location.hash && location.hash !== '#/start') history.replaceState(null, '', '#/start'); }
+    if (t === 'controls') s = sheetFromShort(s) || tpl.ctlSheets[0].name;
+    const key = routeKey(t, s);
+    if (currentKey && currentKey !== key) {
+      scrollMemo[currentKey] = window.scrollY;
+      if (tab === 'controls' && ctlSheet) {
+        lastCtlSheet = ctlSheet;
+        // นับว่า "ผ่านแล้ว" เฉพาะตอนเดินหน้าไปหน้าที่อยู่ถัดไปในลำดับ (ย้อนกลับไปดูหน้าก่อนไม่นับ)
+        const seq = pageSeq();
+        const from = seq.findIndex(([a, b]) => a === 'controls' && b === ctlSheet);
+        const to = seq.findIndex(([a, b]) => a === t && (a !== 'controls' || b === s));
+        if (to > from) onLeaveSheet(ctlSheet, leaveViaNext);
+      }
+    }
+    leaveViaNext = false;
+    if (drawer) closeDrawer('navigate');
+    tab = t;
+    if (t === 'controls') ctlSheet = s;
+    currentKey = key;
+    const nav = pendingNav && pendingNav.key === key ? pendingNav : { scroll: 'restore' };
+    pendingNav = null;
     updateHeader();
     render();
-    window.scrollTo(0, 0);
+    if (nav.then) nav.then();
+    else window.scrollTo(0, nav.scroll === 'restore' ? (scrollMemo[key] || 0) : 0);
   }
 
   // ---------------- render dispatcher ----------------
@@ -416,21 +511,23 @@
     const sh = tpl.ctlSheets.find(x => x.name === s);
     return `4. Controls ${sh.short}`;
   }
-  function goPage([t, s]) {
-    if (t === 'controls') ctlSheet = s;
-    go(t);
-  }
+  function goPage([t, s], scroll = 'top') { navigate(t, s, { scroll }); }
   function bottomNav() {
     if (!tpl) return null;
     const seq = pageSeq();
     const cur = tab === 'controls' ? (ctlSheet || tpl.ctlSheets[0].name) : null;
     const idx = seq.findIndex(([t, s]) => t === tab && (t !== 'controls' || s === cur));
     if (idx < 0) return null;
-    const prev = seq[idx - 1], next = seq[idx + 1];
+    let prev = seq[idx - 1];
+    const next = seq[idx + 1];
+    // จากหน้า Finding: ย้อนกลับไป Controls sheet ที่เปิดล่าสุด ตำแหน่งเดิม
+    const fromFindings = tab === 'findings' && lastCtlSheet;
+    if (fromFindings) prev = ['controls', lastCtlSheet];
+    const prevLabel = fromFindings ? `4. Controls (ล่าสุด: ${tpl.ctlSheets.find(x => x.name === lastCtlSheet).short})` : prev && pageLabel(prev);
     return h('nav', { class: 'pager' },
-      prev ? h('button', { class: 'btn', onclick: () => goPage(prev) }, '← ', pageLabel(prev)) : h('span'),
+      prev ? h('button', { class: 'btn', onclick: () => goPage(prev, fromFindings ? 'restore' : 'top') }, '← ', prevLabel) : h('span'),
       h('span', { class: 'muted small' }, `${idx + 1} / ${seq.length}`),
-      next ? h('button', { class: 'btn primary', onclick: () => goPage(next) }, pageLabel(next), ' →') : h('span'));
+      next ? h('button', { class: 'btn primary', onclick: () => { leaveViaNext = true; goPage(next); } }, pageLabel(next), ' →') : h('span'));
   }
 
   // ---------------- input builders ----------------
@@ -648,6 +745,7 @@
         selectEl(['all', 'todo', 'gap', 'done'], filters.status, v => { filters.status = v || 'all'; render(); }, null)),
       h('input', { type: 'search', placeholder: 'ค้นหา ID / ข้อความ', value: filters.q, oninput: e => { filters.q = e.target.value; drawList(); } }),
       h('button', { class: 'btn small', title: 'ใส่ N/A ให้ข้อที่ไม่อยู่ในระดับ RLA ของบริษัท (เฉพาะข้อที่ยังว่าง ทุก sheet)', onclick: fillNaForNonApplicable }, 'ใส่ N/A ข้อนอกระดับ RLA'));
+    const remarks = h('div', { id: 'ctlRemarks' });
     // ป้ายตัวเลือกที่อ่านง่าย
     const lbl = { auto: 'ตามแท็บ 1', H: 'สูง (H)', M: 'ปานกลาง (M)', L: 'ต่ำ (L)', S: 'ขนาดเล็ก (S)', all: 'แสดงทั้งหมด', todo: 'ยังไม่ประเมิน', gap: 'No / Partial / M1–M2', done: 'ประเมินแล้ว' };
     filterBar.querySelectorAll('option').forEach(o => { if (lbl[o.value]) o.textContent = lbl[o.value]; });
@@ -673,17 +771,31 @@
       list.replaceChildren(...out);
     }
     drawList();
-    page.append(nav, h('div', { class: 'ctl-main' }, filterBar, list));
+    page.append(nav, h('div', { class: 'ctl-main' }, filterBar, remarks, list));
+    drawRemarks(remarks);
     return page;
+  }
+  /** กล่อง Remarks แบบเดียวกับ Excel (เช่น 4. D1!K42:K43) — แสดงเมื่อ sheet ผ่านแล้วแต่ยังมีข้อค้าง */
+  function drawRemarks(box = $('#ctlRemarks')) {
+    if (!box || !ctlSheet) return;
+    const sh = tpl.ctlSheets.find(x => x.name === ctlSheet);
+    const pend = visited.has(sh.name) ? pendingOf(sh) : [];
+    if (!pend.length) { box.replaceChildren(); box.className = ''; return; }
+    box.className = 'remarks';
+    box.replaceChildren(
+      h('strong', {}, `โปรดระวัง ท่านยังไม่ได้บันทึกผลการประเมินในข้อดังนี้ (${pend.length} ข้อ)`),
+      h('div', { class: 'chips' }, pend.map(c => h('button', { class: 'chip warn', onclick: () => scrollToControl(c.id) }, c.id))));
   }
   function drawCtlNav(nav = $('#ctlNav')) {
     if (!nav) return;
     nav.replaceChildren(...tpl.ctlSheets.map(sh => {
       const p = sheetProgress(sh);
       const gaps = sh.controls.filter(c => isGap(ctlValue(c))).length;
-      return h('button', { class: (sh.name === ctlSheet ? 'active ' : '') + (p.total && p.done === p.total ? 'complete' : ''), onclick: () => { ctlSheet = sh.name; render(); window.scrollTo(0, 0); } },
+      const pend = visited.has(sh.name) ? pendingOf(sh).length : 0;
+      return h('button', { class: (sh.name === ctlSheet ? 'active ' : '') + (p.total && p.done === p.total ? 'complete' : ''), onclick: () => navigate('controls', sh.name) },
         h('span', { class: 'nm' }, sh.short),
         h('span', { class: 'pg' }, `${p.done}/${p.total}`),
+        pend ? h('span', { class: 'pendcount', title: 'ยังไม่ประเมิน' }, `ค้าง ${pend}`) : null,
         gaps ? h('span', { class: 'gapcount', title: 'จำนวนข้อ No/Partial/M1/M2' }, gaps) : null);
     }));
   }
@@ -691,7 +803,9 @@
     const card = h('article', { class: 'ctl', id: 'ctl-' + c.id.replace(/\W+/g, '_') });
     function paint() {
       const v = ctlValue(c);
-      card.className = 'ctl ' + resultClass(v) + (isApplicable(c) ? '' : ' notappl');
+      const col = companyCol();
+      const unanswered = visited.has(c.sheet) && !c.fixed && !v && (!col || c.appl[col]);
+      card.className = 'ctl ' + resultClass(v) + (isApplicable(c) ? '' : ' notappl') + (unanswered ? ' unanswered' : '') + (drawer && drawer.control === c ? ' drawer-src' : '');
       const opts = c.type === 'Maturity' ? ['M1', 'M2', 'M3', 'M4', 'M5', 'N/A'] : ['Yes', 'Partial', 'No', 'N/A'];
       const note = state.notes[c.id] || {};
       const linked = findingsForControl(c.id);
@@ -700,14 +814,15 @@
         h('header', {},
           h('span', { class: 'cid' }, c.id),
           h('span', { class: 'badges' }, badges, c.adv ? h('span', { class: 'badge adv on', title: 'Advanced control (สำหรับผู้ประกอบธุรกิจที่มีความเสี่ยงสูง)' }, 'ADV') : null),
+          unanswered ? h('span', { class: 'badge-pending' }, 'ยังไม่ประเมิน') : null,
           h('span', { class: 'refs' }, `สธ. ${c.sor || '-'}${c.np ? ' · นป. #' + c.np : ''}`, ' ', cellTag(c.sheet, c.cell))),
         h('p', { class: 'ctext pre' }, c.text),
         c.fixed
           ? h('p', { class: 'fixed' }, `ผลการประเมิน: ${c.fixed} — แบบฟอร์มกำหนดไว้ (ไม่ต้องกรอก)`)
           : h('div', { class: 'results' },
             h('span', { class: 'lbl' }, c.type === 'Maturity' ? 'Maturity:' : 'ผลการประเมิน:'),
-            opts.map(o => h('button', { class: 'res ' + resultClass(o) + (v === o ? ' sel' : ''), onclick: () => { setVal(c.sheet, c.cell, v === o ? '' : o); paint(); drawCtlNav(); } }, o)),
-            v ? h('button', { class: 'linkbtn', onclick: () => { setVal(c.sheet, c.cell, ''); paint(); drawCtlNav(); } }, 'ล้าง') : null),
+            opts.map(o => h('button', { class: 'res ' + resultClass(o) + (v === o ? ' sel' : ''), onclick: () => { setVal(c.sheet, c.cell, v === o ? '' : o); paint(); drawCtlNav(); drawRemarks(); } }, o)),
+            v ? h('button', { class: 'linkbtn', onclick: () => { setVal(c.sheet, c.cell, ''); paint(); drawCtlNav(); drawRemarks(); } }, 'ล้าง') : null),
         (c.type === 'Maturity' && /^M[1-5]$/.test(v)) ? h('p', { class: 'matdesc' }, h('strong', {}, v + ': '), c.mat[+v[1] - 1]) : null,
         c.type === 'Maturity' ? h('details', {}, h('summary', {}, 'ดูคำอธิบาย Maturity ทั้ง 5 ระดับ'),
           h('ol', { class: 'matlist' }, c.mat.map((m, i) => h('li', { class: v === 'M' + (i + 1) ? 'cur' : '' }, h('strong', {}, `M${i + 1}: `), m)))) : null,
@@ -718,11 +833,12 @@
           h('label', { class: 'field wide' }, h('span', { class: 'lbl' }, 'Evidence ref (ค้นด้วย Ctrl+F ได้)'),
             h('input', { type: 'text', value: note.evidence || '', placeholder: 'เช่น WP-07 IT · ไฟล์ Access Review Q3.xlsx · sheet "Leaver"', oninput: e => setNote(c.id, 'evidence', e.target.value) }))),
         h('footer', {},
-          linked.length ? h('span', { class: 'linked' }, 'Finding: ', linked.map(([f, i]) => h('button', { class: 'linkbtn', onclick: () => gotoFinding(f.uid) }, `#${i + 1}${f.F ? ' (' + f.F + ')' : ''}`))) : null,
-          !c.fixed ? h('button', { class: 'btn small', onclick: () => createFindingFrom(c) }, '+ สร้าง Finding จากข้อนี้') : null),
+          linked.length ? h('span', { class: 'linked' }, 'Finding: ', linked.map(([f, i]) => h('button', { class: 'linkbtn', title: 'เปิดแก้ไขในแผงด้านขวา', onclick: () => openFindingDrawer({ uid: f.uid, control: c }) }, `#${i + 1}${f.F ? ' (' + f.F + ')' : ''}`))) : null,
+          !c.fixed ? h('button', { class: 'btn small', onclick: () => openFindingDrawer({ control: c }) }, '+ สร้าง / ผูก Finding') : null),
       ].filter(Boolean));
     }
     paint();
+    cardPaint[c.id] = paint;
     return card;
   }
   function setNote(id, key, v) {
@@ -743,18 +859,167 @@
   }
 
   // ---------------- tab: findings ----------------
-  function createFindingFrom(c) {
-    if (state.findings.length >= T.findings.rows.length) { toast(`แบบฟอร์มรองรับสูงสุด ${T.findings.rows.length} ข้อ`, 'error'); return; }
-    const f = newFinding();
-    f.C = c.id; f.B = domainFor(c.id); f.D = topicFor(c.id);
-    state.findings.push(f);
-    markDirty();
-    gotoFinding(f.uid);
-  }
   function gotoFinding(uid) {
-    tab = 'findings'; updateHeader(); render();
-    const el = document.getElementById('fd-' + uid);
-    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1500); }
+    navigate('findings', null, { then: () => {
+      const el = document.getElementById('fd-' + uid);
+      if (el) { el.scrollIntoView({ block: 'start' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1500); }
+    } });
+  }
+
+  // ---------------- แผงด้านขวา: สร้าง / ผูก / แก้ Finding ----------------
+  const hasText = f => !!(f.E || f.G || f.F || f.H || f.I);
+  function openFindingDrawer({ control = null, uid = null }) {
+    if (drawer) closeDrawer('switch');
+    if (uid) {
+      const f = state.findings.find(x => x.uid === uid);
+      if (!f) return;
+      drawer = { mode: 'edit', f, control };
+    } else {
+      if (state.findings.length >= T.findings.rows.length) { toast(`แบบฟอร์มรองรับสูงสุด ${T.findings.rows.length} ข้อ`, 'error'); return; }
+      const f = newFinding();
+      f.C = control.id; f.B = domainFor(control.id); f.D = topicFor(control.id);
+      drawer = { mode: 'new', view: 'new', f, control, pick: null };
+    }
+    document.body.classList.add('drawer-open');
+    if (control && cardPaint[control.id]) cardPaint[control.id]();
+    drawDrawer();
+    const el = control && document.getElementById('ctl-' + control.id.replace(/\W+/g, '_'));
+    if (el) el.scrollIntoView({ block: 'nearest' });
+  }
+  function closeDrawer(reason = 'close') {
+    if (!drawer) return;
+    const d = drawer;
+    // ปิดเพราะเปลี่ยนหน้า/กดย้อน ระหว่างร่าง Finding ใหม่ที่พิมพ์ไว้แล้ว → บันทึกให้ ไม่ให้ข้อมูลหาย
+    if (d.mode === 'new' && d.view === 'new' && hasText(d.f) && (reason === 'navigate' || reason === 'switch')) {
+      state.findings.push(d.f); markDirty();
+      toast(`บันทึกร่างเป็น Finding #${state.findings.length} ไว้ให้แล้ว`);
+    }
+    drawer = null;
+    document.body.classList.remove('drawer-open');
+    $('#drawer').replaceChildren();
+    if (d.control && cardPaint[d.control.id]) cardPaint[d.control.id]();
+    if (tab === 'controls') drawCtlNav();
+  }
+  function relatedOrder(control) {
+    // Finding ที่อยู่หัวข้อเดียวกันขึ้นก่อน → หมวดเดียวกัน → อื่น ๆ
+    const topic = topicFor(control.id), dom = domainFor(control.id);
+    return state.findings.map((f, i) => ({ f, i, rank: f.D === topic ? 0 : f.B === dom ? 1 : 2 }))
+      .sort((a, b) => a.rank - b.rank || a.i - b.i);
+  }
+  function drawDrawer() {
+    const d = drawer, box = $('#drawer');
+    if (!d) return;
+    const c = d.control;
+    const idx = state.findings.indexOf(d.f);
+    const title = d.mode === 'edit' ? `Finding #${idx + 1}` : `Finding จาก ${c.id}`;
+    const head = h('header', { class: 'dr-head' },
+      h('div', {}, h('div', { class: 'dr-title' }, title), c ? h('div', { class: 'muted small' }, `${c.id} · ${trunc(c.text, 90)}`) : null),
+      h('button', { class: 'linkbtn dr-x', title: 'ปิด (Esc)', onclick: () => tryCloseDrawer() }, '✕'));
+    let body, foot;
+    if (d.mode === 'new' && d.view === 'link') {
+      const list = relatedOrder(c);
+      const topic = topicFor(c.id);
+      body = h('div', { class: 'dr-body' },
+        h('p', { class: 'muted' }, `เลือก Finding ที่จะผูก ${c.id} เพิ่มเข้าไป — ใน Excel จะต่อ ID ในคอลัมน์ C ของ Finding นั้น (เช่น "D1 #6, ${c.id}")`),
+        h('div', { class: 'pick-list' }, list.map(({ f, i, rank }) => {
+          const ids = parseIds(f.C);
+          const already = ids.includes(c.id);
+          return h('button', { class: 'pick' + (d.pick === f.uid ? ' sel' : ''), disabled: already, onclick: () => { d.pick = f.uid; drawDrawer(); } },
+            h('div', { class: 'pick-h' }, h('strong', {}, `#${i + 1}`), f.F ? h('span', { class: 'rating-' + f.F }, f.F) : null,
+              h('span', { class: 'muted small' }, ids.join(', ') || '(ยังไม่มี ID)'),
+              already ? h('span', { class: 'badge on' }, 'ผูกแล้ว') : rank > 0 ? h('span', { class: 'badge-pending' }, rank === 1 ? 'ต่างหัวข้อ' : 'ต่างหมวด') : null),
+            h('div', { class: 'small' }, f.D || '–'),
+            h('div', { class: 'muted small' }, trunc(f.E, 140) || '(ยังไม่มีข้อตรวจพบ)'));
+        })),
+        (() => {
+          const pf = d.pick && state.findings.find(x => x.uid === d.pick);
+          return pf && pf.D && pf.D !== topic ? h('p', { class: 'warn-text' }, `Finding นี้อยู่หัวข้อ "${pf.D}" ซึ่งต่างจากหัวข้อของ ${c.id} ("${topic}") — คอลัมน์ B/D ใน Excel ใส่ได้ค่าเดียว จะยังเป็นของเดิม`) : null;
+        })());
+      foot = h('footer', { class: 'dr-foot' },
+        h('button', { class: 'btn primary', disabled: !d.pick, onclick: () => linkToExisting() }, `ผูก ${c.id} เข้ากับ Finding ที่เลือก`),
+        h('button', { class: 'btn', onclick: () => tryCloseDrawer() }, 'ยกเลิก'));
+    } else {
+      body = h('div', { class: 'dr-body' }, findingForm(d.f, { rerender: drawDrawer, onChange: () => { if (d.mode === 'edit' && c && cardPaint[c.id]) cardPaint[c.id](); } }));
+      if (d.mode === 'new') {
+        foot = h('footer', { class: 'dr-foot' },
+          h('button', { class: 'btn primary', onclick: () => { state.findings.push(d.f); markDirty(); const n = state.findings.length; drawer.mode = 'saved'; closeDrawer(); toast(`บันทึก Finding #${n} แล้ว`); } }, 'บันทึก Finding'),
+          h('button', { class: 'btn', onclick: () => tryCloseDrawer() }, 'ยกเลิก'));
+      } else {
+        const ids = parseIds(d.f.C);
+        foot = h('footer', { class: 'dr-foot' },
+          h('button', { class: 'btn primary', onclick: () => closeDrawer() }, 'เสร็จ'),
+          h('button', { class: 'btn', onclick: () => { const uid = d.f.uid; closeDrawer(); gotoFinding(uid); } }, 'เปิดในแท็บ Finding'),
+          c && ids.includes(c.id) && ids.length > 1 ? h('button', { class: 'btn', onclick: () => { d.f.C = ids.filter(x => x !== c.id).join(', '); markDirty(); toast(`ถอด ${c.id} ออกจาก Finding #${idx + 1} แล้ว`); closeDrawer(); } }, `ถอด ${c.id} ออก`) : null,
+          h('button', { class: 'btn danger', onclick: () => { if (confirm(`ลบ Finding #${idx + 1}?`)) { state.findings.splice(state.findings.indexOf(d.f), 1); markDirty(); closeDrawer(); toast('ลบ Finding แล้ว'); } } }, 'ลบ Finding'));
+      }
+    }
+    const seg = d.mode === 'new' && state.findings.length
+      ? h('div', { class: 'seg dr-seg' },
+        h('button', { class: d.view === 'new' ? 'active' : '', onclick: () => { d.view = 'new'; drawDrawer(); } }, 'สร้าง Finding ใหม่'),
+        h('button', { class: d.view === 'link' ? 'active' : '', onclick: () => { d.view = 'link'; drawDrawer(); } }, `ผูกกับ Finding ที่มีอยู่ (${state.findings.length})`))
+      : null;
+    box.replaceChildren(...[head, seg, body, foot].filter(Boolean));
+  }
+  function linkToExisting() {
+    const d = drawer, c = d.control;
+    const f = state.findings.find(x => x.uid === d.pick);
+    if (!f) return;
+    const ids = parseIds(f.C);
+    if (!ids.includes(c.id)) ids.push(c.id);
+    f.C = ids.join(', ');
+    markDirty();
+    const n = state.findings.indexOf(f) + 1;
+    drawer.mode = 'saved';
+    closeDrawer();
+    toast(`ผูก ${c.id} เข้ากับ Finding #${n} แล้ว`);
+  }
+  function tryCloseDrawer() {
+    if (!drawer) return;
+    if (drawer.mode === 'new' && drawer.view === 'new' && hasText(drawer.f) && !confirm('ยกเลิกร่าง Finding นี้? (ข้อความที่พิมพ์จะหาย)')) return;
+    drawer.mode = 'cancel';
+    closeDrawer();
+  }
+  function trunc(s, n) { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+  /** ฟอร์มช่องของ Finding — ใช้ร่วมกันทั้งแท็บ Finding และแผงด้านขวา */
+  function findingForm(f, hooks = {}) {
+    const C = tpl.findColByKey;
+    const changed = k => { markDirty(); if (hooks.onChange) hooks.onChange(k); };
+    const set = (k, v) => { f[k] = v; changed(k); };
+    const idWarn = h('small', { class: 'warn-text' });
+    function checkIds() {
+      const ids = parseIds(f.C);
+      const bad = ids.filter(id => !tpl.controlsById[id]);
+      const topics = new Set(ids.filter(id => tpl.controlsById[id]).map(topicFor));
+      idWarn.textContent = bad.length ? `ไม่พบ control ID: ${bad.join(', ')}` : topics.size > 1 ? 'ข้อในรายการอยู่ต่างหัวข้อกัน — คอลัมน์ B/D ใน Excel ใส่ได้ค่าเดียว' : '';
+    }
+    const overdueBadge = h('span');
+    const paintOverdue = () => overdueBadge.replaceChildren(...(isOverdue(f) ? [h('span', { class: 'badge gap on' }, 'เลยกำหนด')] : []));
+    const grid = h('div', { class: 'grid' },
+      h('label', { class: 'field' }, h('span', { class: 'lbl' }, label(C.C)),
+        inputFor('text', f.C, v => { set('C', v); checkIds(); }, { placeholder: 'เช่น D2.11 #13, D2.11 #14' }),
+        idWarn,
+        h('button', { class: 'linkbtn small', onclick: e => {
+          e.preventDefault();
+          const first = parseIds(f.C)[0];
+          if (!first || !tpl.controlsById[first]) { toast('กรอก control ID ก่อน', 'error'); return; }
+          f.B = domainFor(first); f.D = topicFor(first) || f.D; changed('B');
+          if (hooks.rerender) hooks.rerender();
+        } }, 'เติมหมวด/หัวข้อจาก control ID')),
+      h('label', { class: 'field' }, h('span', { class: 'lbl' }, label(C.B)), selectEl(C.B.options, f.B, v => set('B', v))),
+      h('label', { class: 'field wide' }, h('span', { class: 'lbl' }, label(C.D)), selectEl(C.D.options, f.D, v => set('D', v))),
+      h('label', { class: 'field wide' }, h('span', { class: 'lbl' }, label(C.E)), inputFor('textarea', f.E, v => set('E', v), { rows: 3 })),
+      h('label', { class: 'field' }, h('span', { class: 'lbl' }, label(C.F)), selectEl(C.F.options, f.F, v => set('F', v))),
+      h('label', { class: 'field' }, h('span', { class: 'lbl' }, label(C.H)), inputFor('month', f.H, v => { set('H', v); paintOverdue(); })),
+      h('label', { class: 'field wide' }, h('span', { class: 'lbl' }, label(C.G)), inputFor('textarea', f.G, v => set('G', v), { rows: 3 })),
+      h('label', { class: 'field wide' }, h('span', { class: 'lbl' }, label(C.I)), inputFor('text', f.I, v => set('I', v))));
+    const priv = h('div', { class: 'private' },
+      h('span', { class: 'muted small' }, 'ติดตามผล (อยู่ใน JSON เท่านั้น):'),
+      h('label', {}, 'สถานะ ', selectEl(['Open', 'Closed'], f.status, v => { set('status', v || 'Open'); paintOverdue(); }, null)),
+      h('label', {}, 'วันที่ปิดจริง ', inputFor('date', f.closed, v => set('closed', v))),
+      overdueBadge);
+    checkIds(); paintOverdue();
+    return [grid, priv];
   }
   function findingCounts() {
     const c = { H: 0, M: 0, L: 0, open: 0, closed: 0, overdue: 0 };
@@ -798,44 +1063,24 @@
   }
   function stat(label, n, cls = '') { return h('div', { class: 'stat ' + cls }, h('span', { class: 'n' }, n), h('span', { class: 'l' }, label)); }
   function findingCard(f, i, redraw, redrawSummary) {
-    const C = tpl.findColByKey;
-    const idWarn = h('small', { class: 'warn-text' });
-    function checkIds() {
-      const bad = parseIds(f.C).filter(id => !tpl.controlsById[id]);
-      idWarn.textContent = bad.length ? `ไม่พบ control ID: ${bad.join(', ')}` : '';
-    }
-    const set = (k, v) => { f[k] = v; markDirty(); };
     const row = T.findings.rows[i];
+    const ids = parseIds(f.C).filter(id => tpl.controlsById[id]);
     const card = h('article', { class: 'finding' + (isOverdue(f) ? ' overdue' : ''), id: 'fd-' + f.uid },
       h('header', {},
         h('span', { class: 'cid' }, `Finding #${i + 1}`),
         h('span', { class: 'muted small' }, `→ ${T.findings.sheet} แถว ${row}`),
+        ids.length ? h('span', { class: 'chips' }, ids.map(id => h('button', { class: 'chip', title: 'ไปที่ข้อนี้ในหน้า Controls', onclick: () => gotoControl(id) }, '→ ' + id))) : null,
         h('span', { class: 'spacer' }),
         h('button', { class: 'linkbtn', disabled: i === 0, onclick: () => { [state.findings[i - 1], state.findings[i]] = [state.findings[i], state.findings[i - 1]]; markDirty(); redraw(); } }, '↑'),
         h('button', { class: 'linkbtn', disabled: i === state.findings.length - 1, onclick: () => { [state.findings[i + 1], state.findings[i]] = [state.findings[i], state.findings[i + 1]]; markDirty(); redraw(); } }, '↓'),
         h('button', { class: 'linkbtn danger', onclick: () => { if (confirm(`ลบ Finding #${i + 1}?`)) { state.findings.splice(i, 1); markDirty(); redraw(); } } }, 'ลบ')),
-      h('div', { class: 'grid' },
-        h('label', { class: 'field' }, h('span', { class: 'lbl' }, label(C.C)),
-          inputFor('text', f.C, v => { set('C', v); checkIds(); }, { placeholder: 'เช่น D2.11 #13, D2.11 #14' }),
-          idWarn,
-          h('button', { class: 'linkbtn small', onclick: () => {
-            const first = parseIds(f.C)[0];
-            if (!first || !tpl.controlsById[first]) { toast('กรอก control ID ก่อน', 'error'); return; }
-            f.B = domainFor(first); f.D = topicFor(first) || f.D; markDirty(); redraw();
-          } }, 'เติมหมวด/หัวข้อจาก control ID')),
-        h('label', { class: 'field' }, h('span', { class: 'lbl' }, label(C.B)), selectEl(C.B.options, f.B, v => set('B', v))),
-        h('label', { class: 'field wide' }, h('span', { class: 'lbl' }, label(C.D)), selectEl(C.D.options, f.D, v => set('D', v))),
-        h('label', { class: 'field wide' }, h('span', { class: 'lbl' }, label(C.E)), inputFor('textarea', f.E, v => set('E', v), { rows: 3 })),
-        h('label', { class: 'field' }, h('span', { class: 'lbl' }, label(C.F)), selectEl(C.F.options, f.F, v => { set('F', v); redrawSummary(); })),
-        h('label', { class: 'field' }, h('span', { class: 'lbl' }, label(C.H)), inputFor('month', f.H, v => { set('H', v); card.classList.toggle('overdue', isOverdue(f)); redrawSummary(); })),
-        h('label', { class: 'field wide' }, h('span', { class: 'lbl' }, label(C.G)), inputFor('textarea', f.G, v => set('G', v), { rows: 3 })),
-        h('label', { class: 'field wide' }, h('span', { class: 'lbl' }, label(C.I)), inputFor('text', f.I, v => set('I', v)))),
-      h('div', { class: 'private' },
-        h('span', { class: 'muted small' }, 'ติดตามผล (อยู่ใน JSON เท่านั้น):'),
-        h('label', {}, 'สถานะ ', selectEl(['Open', 'Closed'], f.status, v => { set('status', v || 'Open'); card.classList.toggle('overdue', isOverdue(f)); redrawSummary(); }, null)),
-        h('label', {}, 'วันที่ปิดจริง ', inputFor('date', f.closed, v => set('closed', v))),
-        isOverdue(f) ? h('span', { class: 'badge gap on' }, 'เลยกำหนด') : null));
-    checkIds();
+      findingForm(f, {
+        rerender: redraw,
+        onChange: k => {
+          if (k === 'F' || k === 'H' || k === 'status') { card.classList.toggle('overdue', isOverdue(f)); redrawSummary(); }
+          if (k === 'C') { /* chips อัปเดตตอนวาดใหม่ */ }
+        },
+      }));
     return card;
   }
   function label(col) { return clean(col.label).split('\n')[0] || col.col; }
@@ -978,7 +1223,8 @@
     const newTpl = await parseTemplate(newWb);
     const st = await readExistingValues(newWb, newTpl);
     const revision = await detectRevision(newWb);
-    wb = newWb; tpl = newTpl; tplFileName = name; tplSource = source; state = st; dirty = false; ctlSheet = null;
+    wb = newWb; tpl = newTpl; tplFileName = name; tplSource = source; state = st; dirty = false; ctlSheet = null; lastCtlSheet = null;
+    seedVisited();
     tplMeta = { sha256: hex, meta: newWb.meta || {}, revision, size: buf.byteLength };
     if (source === 'file' && revision.status === 'older') toast(`⚠ ไฟล์นี้เป็นแบบฟอร์ม${revision.label} — ดูคำแนะนำที่หน้าเริ่มต้น`, 'error');
     if (source === 'file' && revision.status === 'unknown') toast('⚠ สูตรในไฟล์นี้ไม่ตรงกับแบบฟอร์มฉบับที่รู้จัก — ดูรายละเอียดที่หน้าเริ่มต้น', 'error');
@@ -1127,6 +1373,7 @@
       if (!tpl) await loadTemplateBuffer(await embeddedBuffer(), EMBEDDED_TEMPLATE.fileName, 'embedded', true);
       if (data.formVersion && tpl.version && data.formVersion !== tpl.version) toast(`คำเตือน: JSON บันทึกจากแบบฟอร์ม "${data.formVersion}" แต่ไฟล์ที่โหลดอยู่คือ "${tpl.version}"`, 'error');
       state = { cells: data.cells || {}, findings: (data.findings || []).map(f => Object.assign(newFinding(), f)), notes: data.notes || {}, report: Object.assign(freshReportSettings(), data.report || {}) };
+      seedVisited();
       dirty = false;
       toast(`โหลดงานแล้ว (บันทึกเมื่อ ${data.savedAt ? new Date(data.savedAt).toLocaleString('th-TH') : '-'}) — ฐานแบบฟอร์ม: ${tplSource === 'embedded' ? 'แบบฟอร์มที่ฝังไว้' : tplFileName}`);
       if (tab === 'start') go('basic'); else { render(); updateHeader(); }
@@ -1186,15 +1433,19 @@
     $('#btnExport').addEventListener('click', exportXlsx);
     $('#jsonFile').addEventListener('change', e => { if (e.target.files[0]) loadJsonFile(e.target.files[0]); e.target.value = ''; });
     window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+    window.addEventListener('hashchange', applyRoute);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && drawer) tryCloseDrawer(); });
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+    const v = $('#appVersion'); if (v) v.textContent = 'v' + APP_VERSION;
     updateHeader();
-    render();
+    applyRoute();
   }
 
   // เปิดให้ชุดทดสอบเรียกได้ (ไม่มีผลต่อการทำงานปกติ)
   window.__app = {
     get state() { return state; }, get tpl() { return tpl; }, validate, buildUpdates,
     score: () => Scoring.compute(tpl.controls, ctlValue, getVal(T.basic.sheet, 'C26')),
-    setVal, printReport, render: () => render(),
+    setVal, printReport, render: () => render(), navigate, get visited() { return [...visited]; }, get drawer() { return drawer; },
   };
   document.addEventListener('DOMContentLoaded', init);
 })();

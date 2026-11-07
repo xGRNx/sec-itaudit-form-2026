@@ -51,7 +51,7 @@
    | 5. Finding | `5. Finding` แถว 13–112 และ E5/E6 (จำนวนข้อระดับปานกลาง/ต่ำ — แอปนับให้) |
    | 6. รายงาน | ไม่เขียนลงไฟล์ — พิมพ์รายงานเป็น PDF |
 
-   ทุกหน้ามีปุ่ม **← ก่อนหน้า / ถัดไป →** ที่ท้ายหน้า (ใน Controls จะเลื่อนทีละ sheet D1 → D2.1 → … → D3 → Finding)
+   ทุกหน้ามีปุ่ม **← ก่อนหน้า / ถัดไป →** ที่ท้ายหน้า (ใน Controls จะเลื่อนทีละ sheet D1 → D2.1 → … → D3 → Finding) และ **ปุ่มย้อนของเบราว์เซอร์/เมาส์** ใช้ได้ในแอป
 4. แท็บ **ตรวจความครบถ้วน** ช่วยหาจุดที่ยังขาดหรือไม่สอดคล้องกัน
 5. กด **Export xlsx** แล้วเปิดไฟล์ด้วย Excel ไฟล์ถูกตั้งให้คำนวณสูตรใหม่ทั้งหมดตอนเปิด ทำให้ sheet `6. Result` และกราฟอัปเดตตามข้อมูล
 
@@ -60,7 +60,9 @@
 - **กรองตามระดับ RLA:** ใช้ค่าจาก `1. Basic info!C26` อัตโนมัติ หรือเลือกเองได้ (H/M/L/S/ทั้งหมด)
 - **ข้อแบบ Maturity:** แสดงคำอธิบาย M1–M5 จากแบบฟอร์ม
 - **ปุ่ม "ใส่ N/A ข้อนอกระดับ RLA":** ใส่ N/A ให้เฉพาะข้อที่ยังว่าง ไม่เปลี่ยนข้อที่ประเมินไว้แล้ว
-- **สร้าง Finding จาก control:** เติมหมวด (B) และหัวข้อ (D) ให้อัตโนมัติ
+- **แผง Finding ด้านขวา (หน้า Controls):** สร้าง Finding ใหม่ หรือผูก control เข้ากับ Finding ที่มีอยู่ โดยไม่ต้องออกจากหน้า — เติมหมวด (B) และหัวข้อ (D) ให้อัตโนมัติ
+- **ไฮไลต์ข้อที่ยังไม่ประเมิน** หลังผ่าน sheet ไปแล้ว (การ์ดขอบส้ม, ป้าย "ค้าง n" ที่เมนู sheet, กล่อง Remarks แบบเดียวกับ Excel)
+- **แท็บ Finding:** ปุ่ม `→ control ID` กลับไปยังข้อที่ผูกไว้
 - **ตำแหน่งเซลล์:** ทุกช่องแสดงตำแหน่งในไฟล์ ก.ล.ต. (เช่น `4. D1!J6`) ใช้ค้นด้วย Ctrl+F ได้
 - **บันทึกส่วนตัวต่อ control:** working note และ evidence ref อยู่ใน JSON เท่านั้น ไม่ถูก export ลงไฟล์ ก.ล.ต.
 - **ติดตาม Finding:** สถานะ Open/Closed และวันที่ปิดจริง (อยู่ใน JSON เท่านั้น) พร้อมไฮไลต์ข้อที่เลยกำหนด
@@ -128,6 +130,10 @@
 
 ---
 
+## ประวัติการแก้ไข
+
+ดู [CHANGELOG.md](CHANGELOG.md) — เวอร์ชันปัจจุบันแสดงที่ท้ายหน้าเว็บ
+
 ## โครงสร้างไฟล์
 
 ```
@@ -138,7 +144,7 @@ js/template-2569.js     ผังเซลล์ที่ต้องกรอ�
 js/template-2569-data.js  แบบฟอร์มเปล่าของ ก.ล.ต. (base64 + SHA-256)
 js/scoring.js           คำนวณผลตามสูตร 6. Result / RawData (NIST CSF)
 js/reports.js           รายงาน 3 ตัว (พิมพ์เป็น PDF)
-js/app.js               UI, การตรวจความครบถ้วน, JSON save/load, Export
+js/app.js               UI, การนำทาง, แผง Finding, การตรวจความครบถ้วน, JSON save/load, Export
 vendor/jszip.min.js     JSZip 3.10.2 (MIT หรือ GPLv3 — ดู header ในไฟล์)
 fonts/                  Sarabun (SIL Open Font License 1.1 — ดู OFL-Sarabun.txt)
 ```
@@ -146,7 +152,7 @@ fonts/                  Sarabun (SIL Open Font License 1.1 — ดู OFL-Sarabu
 ## การ Deploy ด้วย GitHub Pages (ทำผ่านหน้าเว็บ GitHub ได้ทั้งหมด)
 
 1. สร้าง repo ใหม่ชื่อ `sec-itaudit-form-2026` (Public)
-2. กด **Add file → Upload files** แล้วลากไฟล์และโฟลเดอร์ทั้งหมด (`index.html`, `README.md`, `css/`, `js/`, `vendor/`, `fonts/`) ลงไป จากนั้น Commit
+2. กด **Add file → Upload files** แล้วลากไฟล์และโฟลเดอร์ทั้งหมด (`index.html`, `README.md`, `CHANGELOG.md`, `css/`, `js/`, `vendor/`, `fonts/`) ลงไป จากนั้น Commit
 3. ไปที่ **Settings → Pages → Build and deployment → Source: Deploy from a branch** เลือก `main` และ `/ (root)` แล้ว Save
 4. รอสักครู่ หน้าเว็บจะอยู่ที่ `https://<username>.github.io/sec-itaudit-form-2026/`
 
@@ -154,4 +160,5 @@ fonts/                  Sarabun (SIL Open Font License 1.1 — ดู OFL-Sarabu
 
 - **Phase 1:** กรอก, ตรวจความครบถ้วน, Export xlsx, บันทึก/โหลด JSON
 - **Phase 2:** รายงาน 1-page Summary, Detailed Summary, Finding คงค้าง (PDF) · E5/E6 อัตโนมัติ · ปุ่มก่อนหน้า/ถัดไป
-- **Phase 2.1 (เวอร์ชันนี้):** ฝังแบบฟอร์มเปล่าของ ก.ล.ต. พร้อม metadata + SHA-256 · หน้าเริ่มต้น 3 ทาง · เปิดงานจาก JSON ได้โดยไม่ต้องมีไฟล์ xlsx · ตรวจฉบับของไฟล์และย้ายข้อมูลไปฉบับใหม่ในคลิกเดียว
+- **v2.1–2.2:** ฝังแบบฟอร์มเปล่าของ ก.ล.ต. พร้อม metadata + SHA-256 · หน้าเริ่มต้น 3 ทาง · ตรวจฉบับของไฟล์และย้ายข้อมูลไปฉบับใหม่
+- **v2.3 (เวอร์ชันนี้):** แผง Finding ด้านขวา · ผูก control กับ Finding เดิม · ปุ่มย้อนของเบราว์เซอร์/เมาส์ · ไฮไลต์ข้อที่ยังไม่ประเมิน — รายละเอียดใน CHANGELOG.md
