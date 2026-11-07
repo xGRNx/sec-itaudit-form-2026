@@ -130,6 +130,17 @@
 
 ---
 
+## License & Third-party notices
+
+| ส่วนประกอบ | License / สิทธิ์ |
+|---|---|
+| โค้ดของ repo นี้ (`index.html`, `css/`, `js/` ยกเว้น `js/template-2569-data.js`) | **MIT** — Copyright (c) 2026 xGRNx (ดู [LICENSE](LICENSE)) |
+| `vendor/jszip.min.js` | JSZip 3.10.2 — dual MIT / GPLv3 (repo นี้ใช้ภายใต้ MIT) · header ลิขสิทธิ์เดิมคงไว้ในไฟล์ |
+| `fonts/` | Sarabun — SIL Open Font License 1.1 (ดู [fonts/OFL-Sarabun.txt](fonts/OFL-Sarabun.txt)) |
+| `js/template-2569-data.js` (แบบฟอร์ม `11155p.xlsx`) | เอกสารของสำนักงาน ก.ล.ต. ที่เผยแพร่ต่อสาธารณะ ฝังไว้โดยไม่แก้ไขเนื้อหา · **ไม่อยู่ภายใต้ MIT** และ repo นี้ไม่อ้างสิทธิ์ใด ๆ ในแบบฟอร์ม |
+
+**ข้อจำกัดความรับผิด:** เครื่องมือนี้เป็นตัวช่วยกรอกและสรุปผล ไม่ใช่ซอฟต์แวร์ของสำนักงาน ก.ล.ต. และไม่มีการรับประกันใด ๆ (ตาม MIT "AS IS") ผู้ใช้ต้องตรวจสอบไฟล์ที่ Export และตัวเลขในรายงานกับแบบฟอร์มจริงก่อนนำส่งทุกครั้ง
+
 ## ประวัติการแก้ไข
 
 ดู [CHANGELOG.md](CHANGELOG.md) — เวอร์ชันปัจจุบันแสดงที่ท้ายหน้าเว็บ

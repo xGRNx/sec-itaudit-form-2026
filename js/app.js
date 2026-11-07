@@ -11,7 +11,7 @@
 (() => {
   const T = TEMPLATE;
   const SCHEMA_VERSION = 1;
-  const APP_VERSION = '2.3.0';
+  const APP_VERSION = '2.3.1';
 
   // ---------------- state ----------------
   let wb = null;          // workbook ต้นฉบับ (อยู่ในหน่วยความจำ)
